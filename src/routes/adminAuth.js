@@ -1,6 +1,6 @@
 const express = require('express');
 const { body } = require('express-validator');
-const { login, refreshToken, logout, forgotPassword, resetPassword, changePassword } = require('../controllers/adminAuthController');
+const { login, refreshToken, logout, forgotPassword, resetPassword, changePassword, updateProfile } = require('../controllers/adminAuthController');
 const { loginLimiter, forgotPasswordLimiter } = require('../middleware/rateLimiter');
 const auth = require('../middleware/auth');
 
@@ -36,6 +36,16 @@ router.post(
       .withMessage('Password must be at least 8 characters.'),
   ],
   resetPassword
+);
+
+router.put(
+  '/profile',
+  auth,
+  [
+    body('name').optional().trim().notEmpty().withMessage('Name cannot be empty.'),
+    body('email').optional().isEmail().withMessage('Valid email is required.').normalizeEmail(),
+  ],
+  updateProfile
 );
 
 router.post(

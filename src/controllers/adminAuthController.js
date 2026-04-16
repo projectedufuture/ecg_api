@@ -35,7 +35,7 @@ async function login(req, res) {
     res.cookie('refreshToken', refreshToken, {
       httpOnly: true,
       secure: config.server.nodeEnv === 'production',
-      sameSite: config.server.nodeEnv === 'production' ? 'strict' : 'lax',
+      sameSite: config.server.nodeEnv === 'production' ? 'none' : 'lax',
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
       path: '/',
     });
@@ -78,7 +78,7 @@ async function refreshToken(req, res) {
     res.cookie('refreshToken', newRefreshToken, {
       httpOnly: true,
       secure: config.server.nodeEnv === 'production',
-      sameSite: config.server.nodeEnv === 'production' ? 'strict' : 'lax',
+      sameSite: config.server.nodeEnv === 'production' ? 'none' : 'lax',
       maxAge: 7 * 24 * 60 * 60 * 1000,
       path: '/',
     });
@@ -211,4 +211,37 @@ async function changePassword(req, res) {
   }
 }
 
-module.exports = { login, refreshToken, logout, forgotPassword, resetPassword, changePassword };
+async function updateProfile(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, data: null, error: errors.array()[0].msg });
+  }
+
+  const { name, email } = req.body;
+
+  try {
+    const admin = await Admin.findOne({ id: req.admin.id });
+    if (!admin) {
+      return res.status(404).json({ success: false, data: null, error: 'Admin not found.' });
+    }
+
+    // Check if new email is already taken by another admin
+    if (email && email.toLowerCase() !== admin.email) {
+      const existing = await Admin.findOne({ email: email.toLowerCase() });
+      if (existing) {
+        return res.status(409).json({ success: false, data: null, error: 'Email is already in use by another admin.' });
+      }
+      admin.email = email.toLowerCase();
+    }
+
+    if (name) admin.name = name;
+    await admin.save();
+
+    return res.json({ success: true, data: admin.toPublicJSON(), error: null });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    return res.status(500).json({ success: false, data: null, error: 'Internal server error.' });
+  }
+}
+
+module.exports = { login, refreshToken, logout, forgotPassword, resetPassword, changePassword, updateProfile };
