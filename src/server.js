@@ -48,6 +48,9 @@ app.use('/api/admin/licenses', licensesRoutes);
 app.use('/api/admin/dashboard', dashboardRoutes);
 app.use('/api/admin/export', exportRoutes);
 
+app.get("/", (req, res) => {
+  res.send("Backend running 🚀");
+});
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ success: false, data: null, error: 'Endpoint not found.' });
