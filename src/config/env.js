@@ -3,7 +3,7 @@ dotenv.config();
 
 module.exports = {
   mongo: {
-    uri: process.env.MONGO_URI || 'mongodb://localhost:27017/ecg_admin',
+    uri: process.env.MONGO_URI,
   },
   jwt: {
     accessSecret: process.env.JWT_ACCESS_SECRET || 'dev-access-secret',
