@@ -24,7 +24,7 @@ module.exports = {
     apiKey: process.env.BREVO_API_KEY || '',
     senderName: process.env.BREVO_SENDER_NAME || 'ECG Admin Panel',
     senderEmail: process.env.BREVO_SENDER_EMAIL || '',
-    frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
+    frontendUrl: process.env.FRONTEND_URL || 'https://admin-ecg.netlify.app/',
   },
   rateLimit: {
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 15 * 60 * 1000,
