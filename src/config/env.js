@@ -20,6 +20,12 @@ module.exports = {
     ? process.env.CORS_ORIGIN.split(",")
     : ["http://localhost:3000"],
 },
+  email: {
+    apiKey: process.env.BREVO_API_KEY || '',
+    senderName: process.env.BREVO_SENDER_NAME || 'ECG Admin Panel',
+    senderEmail: process.env.BREVO_SENDER_EMAIL || '',
+    frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
+  },
   rateLimit: {
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 15 * 60 * 1000,
     max: parseInt(process.env.RATE_LIMIT_MAX, 10) || 100,

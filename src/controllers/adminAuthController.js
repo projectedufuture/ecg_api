@@ -1,6 +1,8 @@
+const crypto = require('crypto');
 const { validationResult } = require('express-validator');
 const Admin = require('../models/Admin');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = require('../utils/tokenUtils');
+const { sendPasswordResetEmail } = require('../utils/emailService');
 const config = require('../config/env');
 
 async function login(req, res) {
@@ -108,4 +110,105 @@ async function logout(req, res) {
   return res.json({ success: true, data: null, error: null });
 }
 
-module.exports = { login, refreshToken, logout };
+async function forgotPassword(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, data: null, error: errors.array()[0].msg });
+  }
+
+  const { email } = req.body;
+
+  try {
+    const admin = await Admin.findOne({ email: email.toLowerCase() });
+
+    // Always respond the same way to avoid email enumeration
+    if (!admin) {
+      return res.json({ success: true, data: null, error: null });
+    }
+
+    // Generate a raw token and hash it for storage
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+
+    admin.resetPasswordToken = hashedToken;
+    admin.resetPasswordExpiry = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+    await admin.save();
+
+    const resetUrl = `${config.email.frontendUrl}/reset-password?token=${rawToken}`;
+
+    await sendPasswordResetEmail({
+      toEmail: admin.email,
+      toName: admin.name,
+      resetUrl,
+    });
+
+    return res.json({ success: true, data: null, error: null });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    return res.status(500).json({ success: false, data: null, error: 'Internal server error.' });
+  }
+}
+
+async function resetPassword(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, data: null, error: errors.array()[0].msg });
+  }
+
+  const { token, newPassword } = req.body;
+
+  try {
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
+    const admin = await Admin.findOne({
+      resetPasswordToken: hashedToken,
+      resetPasswordExpiry: { $gt: new Date() },
+    });
+
+    if (!admin) {
+      return res.status(400).json({ success: false, data: null, error: 'Invalid or expired reset token.' });
+    }
+
+    admin.password = newPassword; // pre-save hook handles bcrypt hashing
+    admin.resetPasswordToken = null;
+    admin.resetPasswordExpiry = null;
+    admin.refreshToken = null; // invalidate any active sessions
+    await admin.save();
+
+    return res.json({ success: true, data: null, error: null });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    return res.status(500).json({ success: false, data: null, error: 'Internal server error.' });
+  }
+}
+
+async function changePassword(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, data: null, error: errors.array()[0].msg });
+  }
+
+  const { current_password, new_password } = req.body;
+
+  try {
+    const admin = await Admin.findOne({ id: req.admin.id });
+    if (!admin) {
+      return res.status(404).json({ success: false, data: null, error: 'Admin not found.' });
+    }
+
+    const isMatch = await admin.comparePassword(current_password);
+    if (!isMatch) {
+      return res.status(400).json({ success: false, data: null, error: 'Current password is incorrect.' });
+    }
+
+    admin.password = new_password; // pre-save hook handles bcrypt hashing
+    await admin.save();
+
+    return res.json({ success: true, data: null, error: null });
+  } catch (error) {
+    console.error('Change password error:', error);
+    return res.status(500).json({ success: false, data: null, error: 'Internal server error.' });
+  }
+}
+
+module.exports = { login, refreshToken, logout, forgotPassword, resetPassword, changePassword };

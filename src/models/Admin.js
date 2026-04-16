@@ -10,6 +10,8 @@ const adminSchema = new mongoose.Schema(
     role: { type: String, enum: ['super_admin', 'client_admin'], required: true },
     clientId: { type: String, default: null },
     refreshToken: { type: String, default: null },
+    resetPasswordToken: { type: String, default: null },
+    resetPasswordExpiry: { type: Date, default: null },
   },
   { timestamps: true }
 );
