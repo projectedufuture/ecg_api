@@ -1,0 +1,123 @@
+const crypto = require('crypto');
+const Reading = require('../../models/Reading');
+const Session = require('../../models/Session');
+const Device = require('../../models/Device');
+const User = require('../../models/User');
+
+function readingId() {
+  return `rdg_${crypto.randomBytes(8).toString('hex')}`;
+}
+
+function sessionId() {
+  return `sess_${crypto.randomBytes(8).toString('hex')}`;
+}
+
+async function syncData(req, res) {
+  const { sessions = [], readings = [] } = req.body || {};
+
+  if (!Array.isArray(sessions) || !Array.isArray(readings)) {
+    return res.status(400).json({
+      success: false,
+      data: null,
+      error: 'sessions and readings must be arrays.',
+    });
+  }
+
+  try {
+    const user = await User.findOne({ id: req.user.userId });
+    if (!user) {
+      return res.status(404).json({ success: false, data: null, error: 'User not found.' });
+    }
+
+    const pairedDevices = await Device.find({ userId: req.user.userId }).lean();
+    const deviceIdSet = new Set(pairedDevices.map((d) => d.id));
+
+    const sessionIdMap = {};
+    const sessionsCreated = [];
+
+    for (const s of sessions) {
+      if (!s.deviceId || !deviceIdSet.has(s.deviceId)) continue;
+
+      const existing = s.id ? await Session.findOne({ id: s.id, userId: req.user.userId }) : null;
+      if (existing) {
+        sessionIdMap[s.id] = existing.id;
+        continue;
+      }
+
+      const newId = s.id || sessionId();
+      const start = s.startTime ? new Date(s.startTime).toISOString() : new Date().toISOString();
+      const end = s.endTime ? new Date(s.endTime).toISOString() : start;
+
+      const session = await Session.create({
+        id: newId,
+        userId: user.id,
+        userEmail: user.email,
+        userName: user.name,
+        deviceId: s.deviceId,
+        startTime: start,
+        endTime: end,
+        duration: s.duration || 0,
+        dataPoints: 0,
+        dataSource: 'stored',
+        avgTemp: s.avgTemp !== undefined ? String(s.avgTemp) : '0',
+        avgHR: s.bpmAvg || 0,
+        minHR: s.bpmMin || 0,
+        maxHR: s.bpmPeak || 0,
+        clientId: user.clientId || 'CLIENT-001',
+      });
+
+      sessionIdMap[s.id || newId] = session.id;
+      sessionsCreated.push(session.id);
+    }
+
+    const readingDocs = [];
+    for (const r of readings) {
+      const mappedSessionId = sessionIdMap[r.sessionId] || r.sessionId;
+      if (!mappedSessionId || !r.deviceId || !deviceIdSet.has(r.deviceId)) continue;
+
+      readingDocs.push({
+        id: readingId(),
+        sessionId: mappedSessionId,
+        userId: req.user.userId,
+        deviceId: r.deviceId,
+        timestamp: new Date(r.timestamp).toISOString(),
+        ecgValue: Number(r.ecgValue),
+        temperatureCelsius:
+          r.temperature !== undefined ? Number(r.temperature) : Number(r.temperatureCelsius ?? 0),
+        clientId: user.clientId || 'CLIENT-001',
+      });
+    }
+
+    if (readingDocs.length) {
+      await Reading.insertMany(readingDocs, { ordered: false });
+    }
+
+    const countsBySession = readingDocs.reduce((acc, r) => {
+      acc[r.sessionId] = (acc[r.sessionId] || 0) + 1;
+      return acc;
+    }, {});
+    await Promise.all(
+      Object.entries(countsBySession).map(([sid, count]) =>
+        Session.updateOne({ id: sid, userId: req.user.userId }, { $inc: { dataPoints: count } })
+      )
+    );
+
+    user.lastActive = new Date().toISOString();
+    await user.save();
+
+    return res.json({
+      success: true,
+      data: {
+        sessionsSynced: sessionsCreated.length,
+        readingsSynced: readingDocs.length,
+        sessionIdMap,
+      },
+      error: null,
+    });
+  } catch (error) {
+    console.error('Sync error:', error);
+    return res.status(500).json({ success: false, data: null, error: 'Internal server error.' });
+  }
+}
+
+module.exports = { syncData };

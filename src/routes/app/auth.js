@@ -1,0 +1,99 @@
+const express = require('express');
+const { body } = require('express-validator');
+const {
+  register,
+  login,
+  refresh,
+  logout,
+  changePassword,
+  forgotPassword,
+  resetPassword,
+} = require('../../controllers/app/authController');
+const appAuth = require('../../middleware/appAuth');
+const { loginLimiter, forgotPasswordLimiter } = require('../../middleware/rateLimiter');
+
+const router = express.Router();
+
+const passwordRules = body('password')
+  .isLength({ min: 8 })
+  .withMessage('Password must be at least 8 characters.')
+  .matches(/[A-Z]/)
+  .withMessage('Password must contain at least one uppercase letter.')
+  .matches(/[a-z]/)
+  .withMessage('Password must contain at least one lowercase letter.')
+  .matches(/[0-9]/)
+  .withMessage('Password must contain at least one number.')
+  .matches(/[^A-Za-z0-9]/)
+  .withMessage('Password must contain at least one special character.');
+
+router.post(
+  '/register',
+  [
+    body('name').trim().notEmpty().withMessage('Name is required.'),
+    body('email').isEmail().withMessage('Valid email is required.').normalizeEmail(),
+    passwordRules,
+  ],
+  register
+);
+
+router.post(
+  '/login',
+  loginLimiter,
+  [
+    body('email').isEmail().withMessage('Valid email is required.').normalizeEmail(),
+    body('password').isString().notEmpty().withMessage('Password is required.'),
+  ],
+  login
+);
+
+router.post('/refresh', refresh);
+
+router.post('/logout', appAuth, logout);
+
+router.post(
+  '/forgot-password',
+  forgotPasswordLimiter,
+  [body('email').isEmail().withMessage('Valid email is required.').normalizeEmail()],
+  forgotPassword
+);
+
+router.post(
+  '/reset-password',
+  [
+    body('token').notEmpty().withMessage('Reset token is required.'),
+    body('newPassword')
+      .isLength({ min: 8 })
+      .withMessage('Password must be at least 8 characters.')
+      .matches(/[A-Z]/)
+      .withMessage('Password must contain at least one uppercase letter.')
+      .matches(/[a-z]/)
+      .withMessage('Password must contain at least one lowercase letter.')
+      .matches(/[0-9]/)
+      .withMessage('Password must contain at least one number.')
+      .matches(/[^A-Za-z0-9]/)
+      .withMessage('Password must contain at least one special character.'),
+  ],
+  resetPassword
+);
+
+router.put(
+  '/change-password',
+  appAuth,
+  [
+    body('currentPassword').notEmpty().withMessage('Current password is required.'),
+    body('newPassword')
+      .isLength({ min: 8 })
+      .withMessage('New password must be at least 8 characters.')
+      .matches(/[A-Z]/)
+      .withMessage('New password must contain at least one uppercase letter.')
+      .matches(/[a-z]/)
+      .withMessage('New password must contain at least one lowercase letter.')
+      .matches(/[0-9]/)
+      .withMessage('New password must contain at least one number.')
+      .matches(/[^A-Za-z0-9]/)
+      .withMessage('New password must contain at least one special character.'),
+  ],
+  changePassword
+);
+
+module.exports = router;

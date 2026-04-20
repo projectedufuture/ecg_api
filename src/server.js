@@ -16,6 +16,15 @@ const licensesRoutes = require('./routes/licenses');
 const dashboardRoutes = require('./routes/dashboard');
 const exportRoutes = require('./routes/export');
 
+// App (mobile) route imports
+const appAuthRoutes = require('./routes/app/auth');
+const appUsersRoutes = require('./routes/app/users');
+const appDevicesRoutes = require('./routes/app/devices');
+const appSessionsRoutes = require('./routes/app/sessions');
+const appReadingsRoutes = require('./routes/app/readings');
+const appSyncRoutes = require('./routes/app/sync');
+const appLicensesRoutes = require('./routes/app/licenses');
+
 const app = express();
 
 // When running behind a reverse proxy (nginx, Render, etc.) so req.ip and
@@ -91,6 +100,15 @@ app.use('/api/admin/devices', devicesRoutes);
 app.use('/api/admin/licenses', licensesRoutes);
 app.use('/api/admin/dashboard', dashboardRoutes);
 app.use('/api/admin/export', exportRoutes);
+
+// Mobile app routes
+app.use('/api/app/auth', appAuthRoutes);
+app.use('/api/app/users', appUsersRoutes);
+app.use('/api/app/devices', appDevicesRoutes);
+app.use('/api/app/sessions', appSessionsRoutes);
+app.use('/api/app/readings', appReadingsRoutes);
+app.use('/api/app/sync', appSyncRoutes);
+app.use('/api/app/licenses', appLicensesRoutes);
 
 app.get("/", (req, res) => {
   res.send("Backend running 🚀");
