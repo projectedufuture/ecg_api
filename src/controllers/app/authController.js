@@ -195,14 +195,25 @@ async function forgotPassword(req, res) {
   }
 
   const { email } = req.body;
+  const isDev = config.server.nodeEnv !== 'production';
 
   try {
-    const user = await User.findOne({ email: email.toLowerCase() });
+    const normalizedEmail = email.toLowerCase();
+    console.log(`[forgot-password] Looking up email: "${normalizedEmail}"`);
 
-    // Always respond identically to prevent email enumeration
+    const user = await User.findOne({ email: normalizedEmail });
+
     if (!user) {
+      console.log(`[forgot-password] NO USER FOUND for "${normalizedEmail}"`);
+      if (isDev) {
+        return res
+          .status(404)
+          .json({ success: false, data: null, error: 'No app user registered with this email.' });
+      }
       return res.json({ success: true, data: null, error: null });
     }
+
+    console.log(`[forgot-password] User found: id=${user.id}, email=${user.email}`);
 
     const rawToken = crypto.randomBytes(32).toString('hex');
     const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
@@ -213,17 +224,30 @@ async function forgotPassword(req, res) {
 
     const resetUrl = `${config.email.frontendUrl}/app/reset-password?token=${rawToken}`;
 
+    console.log(`[forgot-password] Sending email via Brevo to ${user.email} ...`);
+    console.log(`[forgot-password] Reset URL (dev-only): ${resetUrl}`);
+
     try {
       await sendAppPasswordResetEmail({
         toEmail: user.email,
         toName: user.name,
         resetUrl,
       });
+      console.log(`[forgot-password] ✅ Brevo accepted the request for ${user.email}`);
     } catch (mailErr) {
-      console.error('Brevo send error:', mailErr);
+      console.error('[forgot-password] ❌ Brevo send error:', mailErr.message);
+      if (isDev) {
+        return res.status(502).json({
+          success: false,
+          data: null,
+          error: `Email send failed: ${mailErr.message}`,
+        });
+      }
     }
 
-    return res.json({ success: true, data: null, error: null });
+    const body = { success: true, data: null, error: null };
+    if (isDev) body.debug = { resetUrl, email: user.email };
+    return res.json(body);
   } catch (error) {
     console.error('App forgot password error:', error);
     return res.status(500).json({ success: false, data: null, error: 'Internal server error.' });
