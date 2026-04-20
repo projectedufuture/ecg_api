@@ -11,7 +11,9 @@ router.post(
   loginLimiter,
   [
     body('email').isEmail().withMessage('Valid email is required.').normalizeEmail(),
-    body('password').notEmpty().withMessage('Password is required.'),
+    body('password')
+      .isString().withMessage('Password is required.')
+      .isLength({ min: 8 }).withMessage('Password must be at least 8 characters.'),
   ],
   login
 );

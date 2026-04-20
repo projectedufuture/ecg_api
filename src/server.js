@@ -18,14 +18,58 @@ const exportRoutes = require('./routes/export');
 
 const app = express();
 
-// Security middleware
-app.use(helmet());
-app.use(cors({
-  origin: config.cors.origin,
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-}));
+// When running behind a reverse proxy (nginx, Render, etc.) so req.ip and
+// rate-limit key resolve to the real client address.
+app.set('trust proxy', 1);
+
+// Helmet with strict CSP tuned for an API server (no inline scripts served).
+const cspDirectives = {
+  defaultSrc: ["'self'"],
+  scriptSrc: ["'self'"],
+  styleSrc: ["'self'", "'unsafe-inline'"],
+  imgSrc: ["'self'", 'data:', 'https:'],
+  connectSrc: ["'self'"],
+  fontSrc: ["'self'", 'https:', 'data:'],
+  objectSrc: ["'none'"],
+  frameAncestors: ["'none'"],
+  baseUri: ["'self'"],
+  formAction: ["'self'"],
+};
+if (config.server.nodeEnv === 'production') {
+  cspDirectives.upgradeInsecureRequests = [];
+}
+
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: cspDirectives,
+    },
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    referrerPolicy: { policy: 'no-referrer' },
+    hsts:
+      config.server.nodeEnv === 'production'
+        ? { maxAge: 31536000, includeSubDomains: true, preload: true }
+        : false,
+  })
+);
+
+// CORS: whitelist only the configured frontend origin(s). FRONTEND_URL is the
+// canonical env var; CORS_ORIGIN is kept as a back-compat alias.
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow same-origin/tools (no Origin header) and the configured list.
+      if (!origin) return callback(null, true);
+      if (config.cors.origin.includes(origin)) return callback(null, true);
+      return callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
 app.use(mongoSanitize());
 app.use(generalLimiter);
 

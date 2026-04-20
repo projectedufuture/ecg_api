@@ -204,16 +204,18 @@ async function seed() {
     await mongoose.connect(config.mongo.uri);
     console.log('Connected.\n');
 
-    // Clear existing data
+    // Clear existing data — drop the collections (not just deleteMany) so any
+    // stale indexes from an older schema version are removed and Mongoose
+    // recreates them fresh from the current schema on the next insert.
     console.log('Clearing existing data...');
-    await Promise.all([
-      Admin.deleteMany({}),
-      User.deleteMany({}),
-      Device.deleteMany({}),
-      Session.deleteMany({}),
-      Reading.deleteMany({}),
-      License.deleteMany({}),
-    ]);
+    const collections = ['admins', 'users', 'devices', 'sessions', 'licenses', 'readings'];
+    for (const name of collections) {
+      try {
+        await mongoose.connection.db.collection(name).drop();
+      } catch (err) {
+        if (err.codeName !== 'NamespaceNotFound') throw err;
+      }
+    }
     console.log('Cleared.\n');
 
     // 1. Create admin accounts
