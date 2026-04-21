@@ -51,6 +51,7 @@ async function listLicenses(req, res) {
         status: l.status,
         activationDate: l.activationDate,
         expiryDate: l.expiryDate,
+        createdAt: l.createdAt,
       })),
       error: null,
       pagination: {

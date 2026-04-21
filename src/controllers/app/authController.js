@@ -179,6 +179,7 @@ async function changePassword(req, res) {
 
     user.password = newPassword;
     user.refreshToken = null;
+    user.mustChangePassword = false;
     await user.save();
 
     return res.json({ success: true, data: null, error: null });

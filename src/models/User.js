@@ -16,6 +16,7 @@ const userSchema = new mongoose.Schema(
     refreshToken: { type: String, default: null, select: false },
     resetPasswordToken: { type: String, default: null, select: false },
     resetPasswordExpiry: { type: Date, default: null, select: false },
+    mustChangePassword: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
@@ -57,6 +58,7 @@ userSchema.methods.toAppJSON = function () {
     email: this.email,
     deviceId: this.deviceId,
     status: this.status,
+    mustChangePassword: this.mustChangePassword,
   };
 };
 

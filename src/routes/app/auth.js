@@ -1,7 +1,6 @@
 const express = require('express');
 const { body } = require('express-validator');
 const {
-  register,
   login,
   refresh,
   logout,
@@ -14,27 +13,10 @@ const { loginLimiter, forgotPasswordLimiter } = require('../../middleware/rateLi
 
 const router = express.Router();
 
-const passwordRules = body('password')
-  .isLength({ min: 8 })
-  .withMessage('Password must be at least 8 characters.')
-  .matches(/[A-Z]/)
-  .withMessage('Password must contain at least one uppercase letter.')
-  .matches(/[a-z]/)
-  .withMessage('Password must contain at least one lowercase letter.')
-  .matches(/[0-9]/)
-  .withMessage('Password must contain at least one number.')
-  .matches(/[^A-Za-z0-9]/)
-  .withMessage('Password must contain at least one special character.');
-
-router.post(
-  '/register',
-  [
-    body('name').trim().notEmpty().withMessage('Name is required.'),
-    body('email').isEmail().withMessage('Valid email is required.').normalizeEmail(),
-    passwordRules,
-  ],
-  register
-);
+// Self-register has been removed. App users are created exclusively by an admin
+// via POST /api/admin/users — credentials are emailed to the user, and they are
+// forced to change the temp password on their first login (mustChangePassword
+// flag in the login response).
 
 router.post(
   '/login',

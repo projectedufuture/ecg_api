@@ -1,7 +1,83 @@
+const crypto = require('crypto');
 const { validationResult } = require('express-validator');
 const Device = require('../models/Device');
 const License = require('../models/License');
 const Session = require('../models/Session');
+
+const DEVICE_ID_RE = /^ECG-(\d{4,5})$/;
+const DEVICE_PAD = 5; // ECG-00001 style. Set to 4 if you prefer ECG-0001.
+
+function generateLicenseKey() {
+  const prefix = ['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)];
+  const seg1 = crypto.randomBytes(3).toString('hex').toUpperCase().slice(0, 4);
+  const seg2 = crypto.randomBytes(3).toString('hex').toUpperCase().slice(0, 4);
+  return `${prefix}${seg1}-${seg2}`;
+}
+
+async function findNextDeviceNumber() {
+  // Pull the highest numeric ID by parsing the suffix. We sort by id desc,
+  // then walk matches until we find one parseable — works regardless of pad width.
+  const recent = await Device.find({ id: /^ECG-\d+$/ })
+    .sort({ id: -1 })
+    .limit(50)
+    .lean();
+
+  let max = 0;
+  for (const d of recent) {
+    const m = DEVICE_ID_RE.exec(d.id);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > max) max = n;
+    }
+  }
+  return max + 1;
+}
+
+async function createDeviceWithLicense({ deviceId, clientId, firmware, hardwareVersion, licenseYears = 1 }) {
+  const now = new Date();
+  const expiry = new Date(now);
+  expiry.setFullYear(expiry.getFullYear() + licenseYears);
+
+  const device = await Device.create({
+    id: deviceId,
+    userId: null,
+    userName: 'Unassigned',
+    lastSeen: now.toISOString(),
+    firmware: firmware || '1.0.0',
+    hardwareVersion: hardwareVersion || 'HW-2.0',
+    licenseStatus: 'active',
+    batteryLevel: 100,
+    status: 'active',
+    clientId: clientId || 'CLIENT-001',
+  });
+
+  // Ensure a unique license key
+  let licenseKey;
+  for (let i = 0; i < 5; i += 1) {
+    const candidate = generateLicenseKey();
+    const clash = await License.findOne({ licenseKey: candidate }).lean();
+    if (!clash) {
+      licenseKey = candidate;
+      break;
+    }
+  }
+  if (!licenseKey) licenseKey = `${generateLicenseKey()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
+
+  const count = await License.countDocuments();
+  const licId = `LIC-${String(5000 + count).padStart(6, '0')}`;
+
+  const license = await License.create({
+    id: licId,
+    licenseKey,
+    deviceId,
+    clientId: device.clientId,
+    status: 'active',
+    activationDate: now.toISOString().split('T')[0],
+    expiryDate: expiry.toISOString().split('T')[0],
+  });
+
+  return { device, license };
+}
 
 async function listDevices(req, res) {
   try {
@@ -54,18 +130,31 @@ async function listDevices(req, res) {
       .limit(limitNum)
       .lean();
 
+    // Batch-fetch licenses for the page of devices
+    const deviceIds = devices.map((d) => d.id);
+    const licenses = await License.find({ deviceId: { $in: deviceIds } }).lean();
+    const licenseMap = new Map();
+    for (const l of licenses) licenseMap.set(l.deviceId, l);
+
     return res.json({
       success: true,
-      data: devices.map((d) => ({
-        id: d.id,
-        userId: d.userId,
-        userName: d.userName,
-        lastSeen: d.lastSeen,
-        firmware: d.firmware,
-        hardwareVersion: d.hardwareVersion,
-        licenseStatus: d.licenseStatus,
-        batteryLevel: d.batteryLevel,
-      })),
+      data: devices.map((d) => {
+        const l = licenseMap.get(d.id);
+        return {
+          id: d.id,
+          userId: d.userId,
+          userName: d.userName,
+          lastSeen: d.lastSeen,
+          firmware: d.firmware,
+          hardwareVersion: d.hardwareVersion,
+          licenseStatus: d.licenseStatus,
+          batteryLevel: d.batteryLevel,
+          createdAt: d.createdAt,
+          licenseKey: l ? l.licenseKey : null,
+          licenseId: l ? l.id : null,
+          licenseExpiry: l ? l.expiryDate : null,
+        };
+      }),
       error: null,
       pagination: {
         page: pageNum,
@@ -245,37 +334,29 @@ async function registerDevice(req, res) {
   }
 
   try {
-    const { deviceId, userId, firmware, hardwareVersion } = req.body;
+    const { deviceId, firmware, hardwareVersion } = req.body;
 
-    // Validate device ID format: ECG-XXXXX
-    if (!/^ECG-\d{5}$/.test(deviceId)) {
+    if (!DEVICE_ID_RE.test(deviceId)) {
       return res.status(400).json({
         success: false,
         data: null,
-        error: 'Device ID must be in format ECG-XXXXX (5 digits).',
+        error: 'Device ID must be in format ECG-NNNNN.',
       });
     }
 
-    // Check if device already exists
     const existing = await Device.findOne({ id: deviceId });
     if (existing) {
       return res.status(409).json({ success: false, data: null, error: 'Device ID already registered.' });
     }
 
-    const device = await Device.create({
-      id: deviceId,
-      userId: userId || null,
-      userName: 'Unassigned',
-      lastSeen: new Date().toISOString(),
-      firmware: firmware || '1.0.0',
-      hardwareVersion: hardwareVersion || 'HW-2.0',
-      licenseStatus: 'inactive',
-      batteryLevel: 100,
-      status: 'active',
-      clientId: req.admin.clientId || 'CLIENT-001',
+    const { device, license } = await createDeviceWithLicense({
+      deviceId,
+      clientId: req.admin.clientId,
+      firmware,
+      hardwareVersion,
     });
 
-    await req.audit('register', 'device', deviceId, { firmware, hardwareVersion });
+    await req.audit('register', 'device', deviceId, { firmware, hardwareVersion, licenseKey: license.licenseKey });
 
     return res.status(201).json({
       success: true,
@@ -288,6 +369,13 @@ async function registerDevice(req, res) {
         hardwareVersion: device.hardwareVersion,
         licenseStatus: device.licenseStatus,
         batteryLevel: device.batteryLevel,
+        license: {
+          id: license.id,
+          licenseKey: license.licenseKey,
+          status: license.status,
+          activationDate: license.activationDate,
+          expiryDate: license.expiryDate,
+        },
       },
       error: null,
     });
@@ -297,4 +385,77 @@ async function registerDevice(req, res) {
   }
 }
 
-module.exports = { listDevices, getDeviceById, deactivateDevice, reactivateDevice, registerDevice };
+async function createBulkDevices(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, data: null, error: errors.array()[0].msg });
+  }
+
+  try {
+    const count = parseInt(req.body.numberOfDevices, 10);
+    if (!Number.isFinite(count) || count < 1 || count > 500) {
+      return res.status(400).json({
+        success: false,
+        data: null,
+        error: 'numberOfDevices must be between 1 and 500.',
+      });
+    }
+
+    const firmware = req.body.firmware || '1.0.0';
+    const hardwareVersion = req.body.hardwareVersion || 'HW-2.0';
+    const startNum = await findNextDeviceNumber();
+
+    const created = [];
+    for (let i = 0; i < count; i += 1) {
+      const num = startNum + i;
+      const deviceId = `ECG-${String(num).padStart(DEVICE_PAD, '0')}`;
+
+      const { device, license } = await createDeviceWithLicense({
+        deviceId,
+        clientId: req.admin.clientId,
+        firmware,
+        hardwareVersion,
+      });
+
+      created.push({
+        id: device.id,
+        firmware: device.firmware,
+        hardwareVersion: device.hardwareVersion,
+        licenseStatus: device.licenseStatus,
+        license: {
+          id: license.id,
+          licenseKey: license.licenseKey,
+          status: license.status,
+          activationDate: license.activationDate,
+          expiryDate: license.expiryDate,
+        },
+      });
+    }
+
+    await req.audit('bulk_register', 'device', `${count}x`, {
+      range: `${created[0].id}..${created[created.length - 1].id}`,
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: {
+        created: created.length,
+        devices: created,
+        range: { first: created[0].id, last: created[created.length - 1].id },
+      },
+      error: null,
+    });
+  } catch (error) {
+    console.error('Bulk create devices error:', error);
+    return res.status(500).json({ success: false, data: null, error: 'Internal server error.' });
+  }
+}
+
+module.exports = {
+  listDevices,
+  getDeviceById,
+  deactivateDevice,
+  reactivateDevice,
+  registerDevice,
+  createBulkDevices,
+};

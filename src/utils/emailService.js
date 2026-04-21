@@ -174,4 +174,142 @@ async function sendAppPasswordResetEmail({ toEmail, toName, resetUrl }) {
   }
 }
 
-module.exports = { sendPasswordResetEmail, sendAppPasswordResetEmail };
+async function sendUserOnboardingEmail({ toEmail, toName, password, deviceId, licenseKey, loginUrl }) {
+  const deviceLine = deviceId
+    ? `<tr><td style="padding:6px 0;color:#64748B;font-size:13px;">Device:</td><td style="padding:6px 0;color:#F1F5F9;font-size:13px;font-family:monospace;">${deviceId}</td></tr>`
+    : '';
+  const licenseLine = licenseKey
+    ? `<tr><td style="padding:6px 0;color:#64748B;font-size:13px;">License Key:</td><td style="padding:6px 0;color:#F1F5F9;font-size:13px;font-family:monospace;">${licenseKey}</td></tr>`
+    : '';
+
+  const payload = {
+    sender: { name: config.email.senderName, email: config.email.senderEmail },
+    to: [{ email: toEmail, name: toName }],
+    subject: 'Welcome to ECG Wellness – Your Login Credentials',
+    htmlContent: `
+<!DOCTYPE html>
+<html lang="en">
+<body style="margin:0;padding:0;background:#0B0F19;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;">
+    <tr><td align="center">
+      <table width="480" cellpadding="0" cellspacing="0" style="background:#151d2e;border-radius:20px;border:1px solid #1e293b;overflow:hidden;">
+        <tr><td align="center" style="padding:36px 40px 24px;">
+          <h1 style="color:#F1F5F9;font-size:22px;font-weight:700;margin:0 0 6px;">Welcome to ECG Wellness</h1>
+          <p style="color:#64748B;font-size:14px;margin:0;">Your account has been created.</p>
+        </td></tr>
+        <tr><td style="height:1px;background:#1e293b;"></td></tr>
+        <tr><td style="padding:32px 40px;">
+          <p style="color:#94A3B8;font-size:15px;margin:0 0 16px;">Hi <strong style="color:#F1F5F9;">${toName}</strong>,</p>
+          <p style="color:#94A3B8;font-size:15px;margin:0 0 24px;line-height:1.6;">
+            Your ECG Wellness account is ready. Use the credentials below to sign in to the mobile app.
+          </p>
+
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:16px 18px;margin-bottom:20px;">
+            <tr><td style="padding:6px 0;color:#64748B;font-size:13px;width:110px;">Email:</td><td style="padding:6px 0;color:#F1F5F9;font-size:13px;font-family:monospace;">${toEmail}</td></tr>
+            <tr><td style="padding:6px 0;color:#64748B;font-size:13px;">Password:</td><td style="padding:6px 0;color:#F1F5F9;font-size:13px;font-family:monospace;letter-spacing:0.5px;">${password}</td></tr>
+            ${deviceLine}
+            ${licenseLine}
+          </table>
+
+          <div style="background:rgba(6,182,212,0.1);border:1px solid rgba(6,182,212,0.25);border-radius:10px;padding:12px 16px;margin-bottom:20px;">
+            <p style="color:#06B6D4;font-size:13px;margin:0;line-height:1.5;">
+              🔒 For your security you will be asked to change this temporary password on your first login.
+            </p>
+          </div>
+
+          ${loginUrl ? `<table cellpadding="0" cellspacing="0" style="margin:0 auto 8px;"><tr>
+            <td align="center" style="border-radius:12px;background:linear-gradient(135deg,#06B6D4,#8B5CF6);">
+              <a href="${loginUrl}" target="_blank" style="display:inline-block;padding:12px 32px;color:#fff;font-size:14px;font-weight:600;text-decoration:none;border-radius:12px;">Open App</a>
+            </td></tr></table>` : ''}
+
+          <p style="color:#64748B;font-size:12px;margin:16px 0 0;line-height:1.6;">
+            If you did not expect this email, please ignore it or contact support.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim(),
+  };
+
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'accept': 'application/json',
+      'api-key': config.email.apiKey,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text();
+    throw new Error(`Brevo API error ${response.status}: ${errBody}`);
+  }
+}
+
+async function sendDeviceAssignmentEmail({ toEmail, toName, deviceId, licenseKey }) {
+  const payload = {
+    sender: { name: config.email.senderName, email: config.email.senderEmail },
+    to: [{ email: toEmail, name: toName }],
+    subject: 'A new device has been assigned to you',
+    htmlContent: `
+<!DOCTYPE html>
+<html lang="en">
+<body style="margin:0;padding:0;background:#0B0F19;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;">
+    <tr><td align="center">
+      <table width="480" cellpadding="0" cellspacing="0" style="background:#151d2e;border-radius:20px;border:1px solid #1e293b;overflow:hidden;">
+        <tr><td align="center" style="padding:36px 40px 24px;">
+          <h1 style="color:#F1F5F9;font-size:22px;font-weight:700;margin:0 0 6px;">Your Device Is Ready</h1>
+          <p style="color:#64748B;font-size:14px;margin:0;">ECG Wearable Wellness</p>
+        </td></tr>
+        <tr><td style="height:1px;background:#1e293b;"></td></tr>
+        <tr><td style="padding:32px 40px;">
+          <p style="color:#94A3B8;font-size:15px;margin:0 0 16px;">Hi <strong style="color:#F1F5F9;">${toName}</strong>,</p>
+          <p style="color:#94A3B8;font-size:15px;margin:0 0 24px;line-height:1.6;">
+            An ECG Wellness device has been assigned to your account. Use the details below to pair it in the mobile app.
+          </p>
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:16px 18px;margin-bottom:20px;">
+            <tr><td style="padding:6px 0;color:#64748B;font-size:13px;width:110px;">Device:</td><td style="padding:6px 0;color:#F1F5F9;font-size:13px;font-family:monospace;">${deviceId}</td></tr>
+            <tr><td style="padding:6px 0;color:#64748B;font-size:13px;">License Key:</td><td style="padding:6px 0;color:#F1F5F9;font-size:13px;font-family:monospace;letter-spacing:0.5px;">${licenseKey}</td></tr>
+          </table>
+          <div style="background:rgba(6,182,212,0.1);border:1px solid rgba(6,182,212,0.25);border-radius:10px;padding:12px 16px;">
+            <p style="color:#06B6D4;font-size:13px;margin:0;line-height:1.5;">
+              📱 Open the app &rarr; Pair Device &rarr; enter the Device ID and License Key above.
+            </p>
+          </div>
+          <p style="color:#64748B;font-size:12px;margin:16px 0 0;line-height:1.6;">
+            If you did not expect this email, please ignore it or contact support.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim(),
+  };
+
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'accept': 'application/json',
+      'api-key': config.email.apiKey,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text();
+    throw new Error(`Brevo API error ${response.status}: ${errBody}`);
+  }
+}
+
+module.exports = {
+  sendPasswordResetEmail,
+  sendAppPasswordResetEmail,
+  sendUserOnboardingEmail,
+  sendDeviceAssignmentEmail,
+};
