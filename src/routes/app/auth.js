@@ -62,7 +62,6 @@ router.put(
   '/change-password',
   appAuth,
   [
-    body('currentPassword').notEmpty().withMessage('Current password is required.'),
     body('newPassword')
       .isLength({ min: 8 })
       .withMessage('New password must be at least 8 characters.')
@@ -74,6 +73,7 @@ router.put(
       .withMessage('New password must contain at least one number.')
       .matches(/[^A-Za-z0-9]/)
       .withMessage('New password must contain at least one special character.'),
+    body('confirmPassword').notEmpty().withMessage('Confirm password is required.'),
   ],
   changePassword
 );

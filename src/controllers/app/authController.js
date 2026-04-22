@@ -162,19 +162,18 @@ async function changePassword(req, res) {
     return res.status(400).json({ success: false, data: null, error: errors.array()[0].msg });
   }
 
-  const { currentPassword, newPassword } = req.body;
+  const { newPassword, confirmPassword } = req.body;
+
+  if (newPassword !== confirmPassword) {
+    return res
+      .status(400)
+      .json({ success: false, data: null, error: 'New password and confirm password do not match.' });
+  }
 
   try {
     const user = await User.findOne({ id: req.user.userId }).select('+password');
-    if (!user || !user.password) {
+    if (!user) {
       return res.status(404).json({ success: false, data: null, error: 'User not found.' });
-    }
-
-    const isMatch = await user.comparePassword(currentPassword);
-    if (!isMatch) {
-      return res
-        .status(400)
-        .json({ success: false, data: null, error: 'Current password is incorrect.' });
     }
 
     user.password = newPassword;
