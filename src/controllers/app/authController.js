@@ -88,9 +88,10 @@ async function login(req, res) {
 
     user.refreshToken = refreshToken;
     user.lastActive = new Date().toISOString();
+    user.status = 'active';
     await user.save();
 
-    console.log(`[login] user.id=${user.id} mustChangePassword=${user.mustChangePassword}`);
+    console.log(`[login] user.id=${user.id} mustChangePassword=${user.mustChangePassword} status=${user.status}`);
 
     return res.json({
       success: true,
@@ -150,7 +151,10 @@ async function refresh(req, res) {
 
 async function logout(req, res) {
   try {
-    await User.findOneAndUpdate({ id: req.user.userId }, { refreshToken: null });
+    await User.findOneAndUpdate(
+      { id: req.user.userId },
+      { refreshToken: null, status: 'inactive' }
+    );
     return res.json({ success: true, data: null, error: null });
   } catch (error) {
     console.error('App logout error:', error);

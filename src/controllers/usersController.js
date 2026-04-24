@@ -306,7 +306,9 @@ async function createUser(req, res) {
       password: tempPassword,
       registeredDate: nowIso,
       lastActive: nowIso,
-      status: 'active',
+      // Status reflects login state: inactive until the user first signs in to
+      // the mobile app, active while they are logged in.
+      status: 'inactive',
       deviceId: device ? device.id : null,
       clientId: req.admin.clientId || 'CLIENT-001',
       mustChangePassword: true,
