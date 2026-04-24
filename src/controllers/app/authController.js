@@ -90,6 +90,8 @@ async function login(req, res) {
     user.lastActive = new Date().toISOString();
     await user.save();
 
+    console.log(`[login] user.id=${user.id} mustChangePassword=${user.mustChangePassword}`);
+
     return res.json({
       success: true,
       data: {
@@ -176,10 +178,15 @@ async function changePassword(req, res) {
       return res.status(404).json({ success: false, data: null, error: 'User not found.' });
     }
 
+    console.log(`[change-password] BEFORE user.id=${user.id} mustChangePassword=${user.mustChangePassword}`);
+
     user.password = newPassword;
     user.refreshToken = null;
     user.mustChangePassword = false;
     await user.save();
+
+    const reloaded = await User.findOne({ id: user.id });
+    console.log(`[change-password] AFTER  user.id=${reloaded.id} mustChangePassword=${reloaded.mustChangePassword}`);
 
     return res.json({ success: true, data: null, error: null });
   } catch (error) {

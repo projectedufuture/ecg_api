@@ -19,10 +19,12 @@ router.use(auth);
 router.use(applyClientScope);
 router.use(auditLogger);
 
+// For lookups (GET / activate / deactivate) we accept any non-empty device id.
+// The ECG-NNNN/NNNNN format is only enforced at registration time — existing
+// records (including older entries keyed by BLE MAC addresses) must remain
+// readable.
 const deviceIdParam = [
-  param('id')
-    .matches(/^ECG-\d{4,5}$/)
-    .withMessage('Device ID must be in format ECG-NNNN or ECG-NNNNN.'),
+  param('id').isString().trim().notEmpty().withMessage('Device id is required.'),
 ];
 const reasonBody = [body('reason').optional().isString().trim().isLength({ max: 500 })];
 

@@ -64,16 +64,14 @@ app.use(
   })
 );
 
-// CORS: whitelist only the configured frontend origin(s). FRONTEND_URL is the
-// canonical env var; CORS_ORIGIN is kept as a back-compat alias.
+// CORS: permissive — echo back whatever Origin the request came with. This
+// allows any frontend (Netlify, localhost, Netlify deploy-previews, etc.) to
+// call the API while still permitting cookies (credentials: true). Browsers
+// forbid the wildcard "*" when credentials are required, so we reflect the
+// caller's origin instead.
 app.use(
   cors({
-    origin: (origin, callback) => {
-      // Allow same-origin/tools (no Origin header) and the configured list.
-      if (!origin) return callback(null, true);
-      if (config.cors.origin.includes(origin)) return callback(null, true);
-      return callback(new Error('Not allowed by CORS'));
-    },
+    origin: (origin, callback) => callback(null, origin || true),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
