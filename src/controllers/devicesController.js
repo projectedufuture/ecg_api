@@ -150,6 +150,8 @@ async function listDevices(req, res) {
           licenseStatus: d.licenseStatus,
           batteryLevel: d.batteryLevel,
           createdAt: d.createdAt,
+          pairedAt: d.pairedAt,
+          isPaired: Boolean(d.pairedAt),
           licenseKey: l ? l.licenseKey : null,
           licenseId: l ? l.id : null,
           licenseExpiry: l ? l.expiryDate : null,

@@ -12,6 +12,9 @@ const deviceSchema = new mongoose.Schema(
     batteryLevel: { type: Number, default: 0 },
     status: { type: String, enum: ['active', 'inactive'], default: 'active' },
     clientId: { type: String, default: 'CLIENT-001' },
+    // Set the first time a user successfully completes /api/app/devices/pair.
+    // Null = device has not yet been paired by its owner via the mobile app.
+    pairedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

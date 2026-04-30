@@ -122,6 +122,7 @@ async function pairDevice(req, res) {
     }
 
     device.lastSeen = new Date().toISOString();
+    if (!device.pairedAt) device.pairedAt = new Date();
     await device.save();
 
     user.lastActive = new Date().toISOString();
