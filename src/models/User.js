@@ -17,6 +17,13 @@ const userSchema = new mongoose.Schema(
     resetPasswordToken: { type: String, default: null, select: false },
     resetPasswordExpiry: { type: Date, default: null, select: false },
     mustChangePassword: { type: Boolean, default: false },
+    lastLocation: {
+      lat: { type: Number, default: null },
+      lng: { type: Number, default: null },
+      accuracy: { type: Number, default: null },
+      address: { type: String, default: null },
+      capturedAt: { type: Date, default: null },
+    },
   },
   { timestamps: true }
 );
@@ -59,6 +66,7 @@ userSchema.methods.toAppJSON = function () {
     deviceId: this.deviceId,
     status: this.status,
     mustChangePassword: this.mustChangePassword,
+    lastLocation: this.lastLocation || null,
   };
 };
 

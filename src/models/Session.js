@@ -17,6 +17,12 @@ const sessionSchema = new mongoose.Schema(
     minHR: { type: Number, required: true },
     maxHR: { type: Number, required: true },
     clientId: { type: String, default: 'CLIENT-001' },
+    location: {
+      lat: { type: Number, default: null },
+      lng: { type: Number, default: null },
+      accuracy: { type: Number, default: null },
+      address: { type: String, default: null },
+    },
   },
   { timestamps: true }
 );
@@ -43,6 +49,7 @@ sessionSchema.methods.toFrontend = function () {
     avgHR: this.avgHR,
     minHR: this.minHR,
     maxHR: this.maxHR,
+    location: this.location || null,
   };
 };
 

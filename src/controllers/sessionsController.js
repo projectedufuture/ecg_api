@@ -70,6 +70,7 @@ async function listSessions(req, res) {
         avgHR: s.avgHR,
         minHR: s.minHR,
         maxHR: s.maxHR,
+        location: s.location || null,
       })),
       error: null,
       pagination: {
@@ -130,6 +131,7 @@ async function getSessionById(req, res) {
         avgHR: session.avgHR,
         minHR: session.minHR,
         maxHR: session.maxHR,
+        location: session.location || null,
         ecgValues,
         temperatureValues,
         timestamps,

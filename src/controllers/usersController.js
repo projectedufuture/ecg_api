@@ -89,6 +89,7 @@ async function listUsers(req, res) {
         status: u.status,
         deviceId: u.deviceId,
         sessions: u.sessions,
+        lastLocation: u.lastLocation || null,
       })),
       error: null,
       pagination: {
@@ -163,6 +164,7 @@ async function getUserById(req, res) {
         status: user.status,
         deviceId: user.deviceId,
         sessions: user.sessions,
+        lastLocation: user.lastLocation || null,
         linkedDevices,
         sessionHistory,
       },

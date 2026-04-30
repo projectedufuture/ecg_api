@@ -15,7 +15,7 @@ async function createSession(req, res) {
     return res.status(400).json({ success: false, data: null, error: errors.array()[0].msg });
   }
 
-  const { deviceId, startTime, name } = req.body;
+  const { deviceId, startTime, name, location } = req.body;
 
   try {
     const device = await Device.findOne({ id: deviceId, userId: req.user.userId });
@@ -31,6 +31,28 @@ async function createSession(req, res) {
     }
 
     const start = startTime ? new Date(startTime).toISOString() : new Date().toISOString();
+
+    // Accept an optional location captured at session start. Falls back to the
+    // user's last known location so admins always see something on the map.
+    let sessionLocation = null;
+    if (location && Number.isFinite(Number(location.lat)) && Number.isFinite(Number(location.lng))) {
+      sessionLocation = {
+        lat: Number(location.lat),
+        lng: Number(location.lng),
+        accuracy: location.accuracy != null ? Number(location.accuracy) : null,
+        address: location.address || null,
+      };
+      // Also update the user's "current" location since this is fresher.
+      user.lastLocation = { ...sessionLocation, capturedAt: new Date() };
+      await user.save();
+    } else if (user.lastLocation && user.lastLocation.lat != null && user.lastLocation.lng != null) {
+      sessionLocation = {
+        lat: user.lastLocation.lat,
+        lng: user.lastLocation.lng,
+        accuracy: user.lastLocation.accuracy,
+        address: user.lastLocation.address,
+      };
+    }
 
     const session = await Session.create({
       id: makeSessionId(),
@@ -48,6 +70,7 @@ async function createSession(req, res) {
       minHR: 0,
       maxHR: 0,
       clientId: user.clientId || 'CLIENT-001',
+      location: sessionLocation,
     });
 
     return res.status(201).json({

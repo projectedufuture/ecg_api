@@ -18,6 +18,10 @@ router.post(
     body('deviceId').isString().trim().notEmpty().withMessage('deviceId is required.'),
     body('startTime').optional().isISO8601().withMessage('startTime must be ISO-8601.'),
     body('name').optional().isString().trim(),
+    body('location.lat').optional().isFloat({ min: -90, max: 90 }),
+    body('location.lng').optional().isFloat({ min: -180, max: 180 }),
+    body('location.accuracy').optional().isFloat({ min: 0 }),
+    body('location.address').optional().isString().trim().isLength({ max: 500 }),
   ],
   createSession
 );

@@ -49,4 +49,39 @@ async function updateMe(req, res) {
   }
 }
 
-module.exports = { getMe, updateMe };
+async function updateLocation(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, data: null, error: errors.array()[0].msg });
+  }
+
+  const { lat, lng, accuracy, address } = req.body;
+
+  try {
+    const user = await User.findOne({ id: req.user.userId });
+    if (!user) {
+      return res.status(404).json({ success: false, data: null, error: 'User not found.' });
+    }
+
+    user.lastLocation = {
+      lat: Number(lat),
+      lng: Number(lng),
+      accuracy: accuracy != null ? Number(accuracy) : null,
+      address: address || null,
+      capturedAt: new Date(),
+    };
+    user.lastActive = new Date().toISOString();
+    await user.save();
+
+    return res.json({
+      success: true,
+      data: { lastLocation: user.lastLocation },
+      error: null,
+    });
+  } catch (error) {
+    console.error('App update location error:', error);
+    return res.status(500).json({ success: false, data: null, error: 'Internal server error.' });
+  }
+}
+
+module.exports = { getMe, updateMe, updateLocation };
