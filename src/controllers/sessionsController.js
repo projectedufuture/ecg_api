@@ -57,6 +57,7 @@ async function listSessions(req, res) {
       success: true,
       data: sessions.map((s) => ({
         id: s.id,
+        name: s.name || null,
         userId: s.userId,
         userEmail: s.userEmail,
         userName: s.userName,
@@ -118,6 +119,7 @@ async function getSessionById(req, res) {
       success: true,
       data: {
         id: session.id,
+        name: session.name || null,
         userId: session.userId,
         userEmail: session.userEmail,
         userName: session.userName,

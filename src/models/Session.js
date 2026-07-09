@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const sessionSchema = new mongoose.Schema(
   {
     id: { type: String, required: true, unique: true },
+    name: { type: String, default: null },
     userId: { type: String, required: true },
     userEmail: { type: String, required: true },
     userName: { type: String, required: true },
@@ -36,6 +37,7 @@ sessionSchema.index({ userId: 1, startTime: -1 });
 sessionSchema.methods.toFrontend = function () {
   return {
     id: this.id,
+    name: this.name || null,
     userId: this.userId,
     userEmail: this.userEmail,
     userName: this.userName,

@@ -56,6 +56,7 @@ async function createSession(req, res) {
 
     const session = await Session.create({
       id: makeSessionId(),
+      name: name || null,
       userId: user.id,
       userEmail: user.email,
       userName: user.name,
@@ -101,11 +102,20 @@ async function stopSession(req, res) {
 
     const end = endTime ? new Date(endTime).toISOString() : new Date().toISOString();
     session.endTime = end;
-    if (typeof duration === 'number') session.duration = duration;
+
+    // Duration is authoritative from the timestamps (in whole minutes), so it can
+    // never disagree with the displayed Start/End regardless of what the client sent.
+    const elapsedMs = new Date(end).getTime() - new Date(session.startTime).getTime();
+    session.duration = Math.max(0, Math.round(elapsedMs / 60000));
+
     if (typeof bpmAvg === 'number') session.avgHR = bpmAvg;
     if (typeof bpmPeak === 'number') session.maxHR = bpmPeak;
     if (typeof bpmMin === 'number') session.minHR = bpmMin;
-    if (avgTemp !== undefined) session.avgTemp = String(avgTemp);
+    // Round temperature to 1 decimal to avoid float noise (e.g. 30.0399999…).
+    if (avgTemp !== undefined) session.avgTemp = String(Number(avgTemp).toFixed(1));
+
+    // The recording is finished — it is no longer a live stream.
+    session.dataSource = 'stored';
 
     const dataPoints = await Reading.countDocuments({ sessionId, userId: req.user.userId });
     session.dataPoints = dataPoints;
@@ -148,6 +158,7 @@ async function listSessions(req, res) {
       success: true,
       data: sessions.map((s) => ({
         id: s.id,
+        name: s.name || null,
         deviceId: s.deviceId,
         startTime: s.startTime,
         endTime: s.endTime,
@@ -192,6 +203,7 @@ async function getSession(req, res) {
       success: true,
       data: {
         id: session.id,
+        name: session.name || null,
         deviceId: session.deviceId,
         startTime: session.startTime,
         endTime: session.endTime,
