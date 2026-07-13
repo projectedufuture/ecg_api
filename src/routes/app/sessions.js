@@ -36,6 +36,9 @@ router.put(
     body('bpmAvg').optional().isFloat({ min: 0 }),
     body('bpmPeak').optional().isFloat({ min: 0 }),
     body('bpmMin').optional().isFloat({ min: 0 }),
+    body('spo2Avg').optional().isFloat({ min: 0, max: 100 }),
+    body('spo2Peak').optional().isFloat({ min: 0, max: 100 }),
+    body('spo2Min').optional().isFloat({ min: 0, max: 100 }),
     body('avgTemp').optional().isFloat(),
   ],
   stopSession

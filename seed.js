@@ -107,6 +107,8 @@ function generateSessions(users) {
     const avgHRRand = rand();
     const minHRRand = rand();
     const maxHRRand = rand();
+    const avgSpo2Rand = rand();
+    const minSpo2Rand = rand();
 
     const dur = Math.floor(durRand * 180) + 10;
     const start = new Date(2026, 2, 15 + Math.floor(dayRand * 20));
@@ -128,6 +130,9 @@ function generateSessions(users) {
       avgHR: Math.floor(60 + avgHRRand * 40),
       minHR: Math.floor(55 + minHRRand * 15),
       maxHR: Math.floor(100 + maxHRRand * 40),
+      avgSpo2: Math.floor(96 + avgSpo2Rand * 3), // 96–99%
+      minSpo2: Math.floor(92 + minSpo2Rand * 4), // 92–95%
+      maxSpo2: 100,
       clientId: 'CLIENT-001',
     };
   });

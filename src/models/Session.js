@@ -17,6 +17,9 @@ const sessionSchema = new mongoose.Schema(
     avgHR: { type: Number, required: true },
     minHR: { type: Number, required: true },
     maxHR: { type: Number, required: true },
+    avgSpo2: { type: Number, default: 0 },
+    minSpo2: { type: Number, default: 0 },
+    maxSpo2: { type: Number, default: 0 },
     clientId: { type: String, default: 'CLIENT-001' },
     location: {
       lat: { type: Number, default: null },
@@ -51,6 +54,9 @@ sessionSchema.methods.toFrontend = function () {
     avgHR: this.avgHR,
     minHR: this.minHR,
     maxHR: this.maxHR,
+    avgSpo2: this.avgSpo2 || 0,
+    minSpo2: this.minSpo2 || 0,
+    maxSpo2: this.maxSpo2 || 0,
     location: this.location || null,
   };
 };

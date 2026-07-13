@@ -92,7 +92,8 @@ async function stopSession(req, res) {
   }
 
   const { sessionId } = req.params;
-  const { endTime, duration, bpmAvg, bpmPeak, bpmMin, avgTemp } = req.body;
+  const { endTime, duration, bpmAvg, bpmPeak, bpmMin, avgTemp, spo2Avg, spo2Peak, spo2Min } =
+    req.body;
 
   try {
     const session = await Session.findOne({ id: sessionId, userId: req.user.userId });
@@ -111,6 +112,9 @@ async function stopSession(req, res) {
     if (typeof bpmAvg === 'number') session.avgHR = bpmAvg;
     if (typeof bpmPeak === 'number') session.maxHR = bpmPeak;
     if (typeof bpmMin === 'number') session.minHR = bpmMin;
+    if (typeof spo2Avg === 'number') session.avgSpo2 = spo2Avg;
+    if (typeof spo2Peak === 'number') session.maxSpo2 = spo2Peak;
+    if (typeof spo2Min === 'number') session.minSpo2 = spo2Min;
     // Round temperature to 1 decimal to avoid float noise (e.g. 30.0399999…).
     if (avgTemp !== undefined) session.avgTemp = String(Number(avgTemp).toFixed(1));
 
@@ -167,6 +171,9 @@ async function listSessions(req, res) {
         avgHR: s.avgHR,
         minHR: s.minHR,
         maxHR: s.maxHR,
+        avgSpo2: s.avgSpo2 || 0,
+        minSpo2: s.minSpo2 || 0,
+        maxSpo2: s.maxSpo2 || 0,
         avgTemp: s.avgTemp,
       })),
       pagination: {
@@ -212,6 +219,9 @@ async function getSession(req, res) {
         avgHR: session.avgHR,
         minHR: session.minHR,
         maxHR: session.maxHR,
+        avgSpo2: session.avgSpo2 || 0,
+        minSpo2: session.minSpo2 || 0,
+        maxSpo2: session.maxSpo2 || 0,
         avgTemp: session.avgTemp,
         readings: readings.map((r) => ({
           timestamp: r.timestamp,
