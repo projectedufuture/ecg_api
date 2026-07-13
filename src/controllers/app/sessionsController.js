@@ -109,20 +109,61 @@ async function stopSession(req, res) {
     const elapsedMs = new Date(end).getTime() - new Date(session.startTime).getTime();
     session.duration = Math.max(0, Math.round(elapsedMs / 60000));
 
-    if (typeof bpmAvg === 'number') session.avgHR = bpmAvg;
-    if (typeof bpmPeak === 'number') session.maxHR = bpmPeak;
-    if (typeof bpmMin === 'number') session.minHR = bpmMin;
-    if (typeof spo2Avg === 'number') session.avgSpo2 = spo2Avg;
-    if (typeof spo2Peak === 'number') session.maxSpo2 = spo2Peak;
-    if (typeof spo2Min === 'number') session.minSpo2 = spo2Min;
-    // Round temperature to 1 decimal to avoid float noise (e.g. 30.0399999…).
-    if (avgTemp !== undefined) session.avgTemp = String(Number(avgTemp).toFixed(1));
+    // Compute HR / SpO2 / temperature summaries FROM the stored readings — the
+    // backend is the source of truth, so the app never has to send avg/min/max.
+    // 0-values (no-finger samples) are excluded from HR/SpO2 via the per-facet $match.
+    const [agg] = await Reading.aggregate([
+      { $match: { sessionId, userId: req.user.userId } },
+      {
+        $facet: {
+          hr: [
+            { $match: { hr: { $gt: 0 } } },
+            { $group: { _id: null, avg: { $avg: '$hr' }, min: { $min: '$hr' }, max: { $max: '$hr' } } },
+          ],
+          spo2: [
+            { $match: { spo2: { $gt: 0 } } },
+            { $group: { _id: null, avg: { $avg: '$spo2' }, min: { $min: '$spo2' }, max: { $max: '$spo2' } } },
+          ],
+          temp: [{ $group: { _id: null, avg: { $avg: '$temperatureCelsius' } } }],
+          count: [{ $count: 'n' }],
+        },
+      },
+    ]);
+
+    const hr = agg?.hr?.[0];
+    const spo2 = agg?.spo2?.[0];
+    const temp = agg?.temp?.[0];
+
+    // HR — from readings if present, else fall back to whatever the client sent.
+    if (hr) {
+      session.avgHR = Math.round(hr.avg);
+      session.minHR = hr.min;
+      session.maxHR = hr.max;
+    } else {
+      if (typeof bpmAvg === 'number') session.avgHR = bpmAvg;
+      if (typeof bpmPeak === 'number') session.maxHR = bpmPeak;
+      if (typeof bpmMin === 'number') session.minHR = bpmMin;
+    }
+
+    // SpO2 — same rule.
+    if (spo2) {
+      session.avgSpo2 = Math.round(spo2.avg);
+      session.minSpo2 = spo2.min;
+      session.maxSpo2 = spo2.max;
+    } else {
+      if (typeof spo2Avg === 'number') session.avgSpo2 = spo2Avg;
+      if (typeof spo2Peak === 'number') session.maxSpo2 = spo2Peak;
+      if (typeof spo2Min === 'number') session.minSpo2 = spo2Min;
+    }
+
+    // Temperature — average of readings, rounded to 1 decimal (avoids float noise).
+    if (temp && temp.avg != null) session.avgTemp = String(temp.avg.toFixed(1));
+    else if (avgTemp !== undefined) session.avgTemp = String(Number(avgTemp).toFixed(1));
 
     // The recording is finished — it is no longer a live stream.
     session.dataSource = 'stored';
 
-    const dataPoints = await Reading.countDocuments({ sessionId, userId: req.user.userId });
-    session.dataPoints = dataPoints;
+    session.dataPoints = agg?.count?.[0]?.n || 0;
 
     await session.save();
 
@@ -227,6 +268,8 @@ async function getSession(req, res) {
           timestamp: r.timestamp,
           ecgValue: r.ecgValue,
           temperature: r.temperatureCelsius,
+          hr: r.hr || 0,
+          spo2: r.spo2 || 0,
         })),
       },
       error: null,

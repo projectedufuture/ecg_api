@@ -8,6 +8,8 @@ const readingSchema = new mongoose.Schema(
     timestamp: { type: String, required: true },
     ecgValue: { type: Number, required: true },
     temperatureCelsius: { type: Number, required: true },
+    hr: { type: Number, default: 0 },
+    spo2: { type: Number, default: 0 },
     deviceId: { type: String, required: true },
     clientId: { type: String, default: 'CLIENT-001' },
   },
@@ -27,6 +29,8 @@ readingSchema.methods.toFrontend = function () {
     timestamp: this.timestamp,
     ecgValue: this.ecgValue,
     temperatureCelsius: this.temperatureCelsius,
+    hr: this.hr || 0,
+    spo2: this.spo2 || 0,
     deviceId: this.deviceId,
   };
 };

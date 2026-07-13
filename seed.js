@@ -194,6 +194,8 @@ function generateReadingsForSession(session) {
       timestamp: ts.toISOString(),
       ecgValue: parseFloat(ecgValues[i].toFixed(4)),
       temperatureCelsius: parseFloat((36.2 + Math.random() * 1.2).toFixed(2)),
+      hr: Math.round(session.avgHR + (Math.random() - 0.5) * 20),
+      spo2: Math.round(96 + Math.random() * 4),
       deviceId: session.deviceId,
       clientId: 'CLIENT-001',
     });

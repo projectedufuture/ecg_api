@@ -14,6 +14,8 @@ router.post(
     body('readings').isArray({ min: 1 }).withMessage('readings must be a non-empty array.'),
     body('readings.*.timestamp').isISO8601().withMessage('Each reading needs an ISO-8601 timestamp.'),
     body('readings.*.ecgValue').isNumeric().withMessage('ecgValue must be numeric.'),
+    body('readings.*.hr').optional().isFloat({ min: 0 }).withMessage('hr must be a positive number.'),
+    body('readings.*.spo2').optional().isFloat({ min: 0, max: 100 }).withMessage('spo2 must be 0–100.'),
   ],
   uploadReadings
 );

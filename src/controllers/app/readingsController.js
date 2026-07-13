@@ -54,6 +54,8 @@ async function uploadReadings(req, res) {
       ecgValue: Number(r.ecgValue),
       temperatureCelsius:
         r.temperature !== undefined ? Number(r.temperature) : Number(r.temperatureCelsius ?? 0),
+      hr: r.hr !== undefined ? Number(r.hr) : 0,
+      spo2: r.spo2 !== undefined ? Number(r.spo2) : 0,
       clientId: session.clientId || 'CLIENT-001',
     }));
 

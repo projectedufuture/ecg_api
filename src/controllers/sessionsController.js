@@ -112,11 +112,39 @@ async function getSessionById(req, res) {
     const ecgValues = readings.map((r) => r.ecgValue);
     const temperatureValues = readings.map((r) => r.temperatureCelsius);
     const timestamps = readings.map((r) => r.timestamp);
+    const hrValues = readings.map((r) => r.hr || 0);
+    const spo2Values = readings.map((r) => r.spo2 || 0);
     const hrData = readings.map((r) => ({
       timestamp: r.timestamp,
       ecgValue: r.ecgValue,
       temperatureCelsius: r.temperatureCelsius,
+      hr: r.hr || 0,
+      spo2: r.spo2 || 0,
     }));
+
+    // Compute avg/min/max from the actual readings (ignoring 0 = no-finger samples).
+    // Falls back to the stored session summary when readings carry no HR/SpO2 data.
+    const stats = (values, fallback) => {
+      const valid = values.filter((v) => v > 0);
+      if (valid.length === 0) return fallback;
+      const sum = valid.reduce((a, b) => a + b, 0);
+      return {
+        avg: Math.round(sum / valid.length),
+        min: Math.min(...valid),
+        max: Math.max(...valid),
+      };
+    };
+
+    const hrStats = stats(hrValues, {
+      avg: session.avgHR,
+      min: session.minHR,
+      max: session.maxHR,
+    });
+    const spo2Stats = stats(spo2Values, {
+      avg: session.avgSpo2 || 0,
+      min: session.minSpo2 || 0,
+      max: session.maxSpo2 || 0,
+    });
 
     return res.json({
       success: true,
@@ -133,15 +161,17 @@ async function getSessionById(req, res) {
         dataPoints: session.dataPoints,
         dataSource: session.dataSource,
         avgTemp: session.avgTemp,
-        avgHR: session.avgHR,
-        minHR: session.minHR,
-        maxHR: session.maxHR,
-        avgSpo2: session.avgSpo2 || 0,
-        minSpo2: session.minSpo2 || 0,
-        maxSpo2: session.maxSpo2 || 0,
+        avgHR: hrStats.avg,
+        minHR: hrStats.min,
+        maxHR: hrStats.max,
+        avgSpo2: spo2Stats.avg,
+        minSpo2: spo2Stats.min,
+        maxSpo2: spo2Stats.max,
         location: session.location || null,
         ecgValues,
         temperatureValues,
+        hrValues,
+        spo2Values,
         timestamps,
         readings: hrData,
       },
