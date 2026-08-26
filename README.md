@@ -625,6 +625,56 @@ cost one lookup. Distinct places take about a second each, by design.
 
 ---
 
+## App report API
+
+The phone reads reports through `/api/app/reports`, authenticated with the app
+access token (`Authorization: Bearer <token>`).
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/app/reports/sessions` | the user's recordings, newest first, with the state of their reports (`?limit=` 1-100, default 25) |
+| `GET /api/app/reports/:sessionId` | headline numbers for all seven modules in one request |
+| `GET /api/app/reports/:sessionId/:module` | one module in full, charts and events included |
+
+`:module` is one of `ecg-rr`, `hrv`, `rhythm`, `respiration`, `spo2`,
+`temperature`, `combined` — the same names the admin API uses.
+
+### Authorization
+
+Every lookup is scoped to the token's own `userId`. A session id belonging to
+another user returns **404**, identical to an id that does not exist — so the
+endpoint never confirms that someone else's session exists. The analysis
+collections are never queried by `sessionId` alone.
+
+### Why there are two levels
+
+A full seven-module report is around **300 KB**; the overview of the same
+recording is **1.6 KB**. Pushing the per-sample series and event lists down a
+mobile connection to render a summary screen is the wrong trade, so the overview
+omits them and the app fetches a module in full only when the user opens it.
+
+The overview is a *projection of the same mapped response* the detail endpoint
+returns, not a separately-computed summary — so the two can never disagree about
+a number. Measured in the test suite: app and admin return **byte-identical**
+bodies for all seven modules.
+
+### Generation state
+
+When the reports are not readable, the endpoints answer **HTTP 200** with the
+reason rather than an error, because nothing has gone wrong:
+
+| `reportStatus` | `unavailableReason` | What the app should do |
+|---|---|---|
+| `not_started` | `recording_not_finished` | the recording is still running |
+| `pending` / `generating` | `generation_in_progress` | poll; `retryAfterSec` hints how soon |
+| `ready` | — | render the report |
+| `too_short` | `session_too_short` | show the minimum-length message |
+| `failed` | `generation_failed` | offer a retry |
+
+A `failed` response carries a generic message: the underlying error can name
+internal collections and is of no use on a patient's phone. The detail stays in
+the session's `reportError` for operators.
+
 ## Report generation lifecycle
 
 Reports are derived when a **recording finishes** — not when someone opens the

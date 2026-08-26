@@ -19,6 +19,7 @@ const exportRoutes = require('./routes/export');
 // App (mobile) route imports
 const appAuthRoutes = require('./routes/app/auth');
 const appUsersRoutes = require('./routes/app/users');
+const appReportsRoutes = require('./routes/app/reports');
 const appDevicesRoutes = require('./routes/app/devices');
 const appSessionsRoutes = require('./routes/app/sessions');
 const appReadingsRoutes = require('./routes/app/readings');
@@ -105,6 +106,7 @@ app.use('/api/app/users', appUsersRoutes);
 app.use('/api/app/devices', appDevicesRoutes);
 app.use('/api/app/sessions', appSessionsRoutes);
 app.use('/api/app/readings', appReadingsRoutes);
+app.use('/api/app/reports', appReportsRoutes);
 app.use('/api/app/sync', appSyncRoutes);
 app.use('/api/app/licenses', appLicensesRoutes);
 
