@@ -1,3 +1,4 @@
+const config = require('../config/env');
 const Reading = require('../models/Reading');
 const Session = require('../models/Session');
 const EcgRrAnalysis = require('../models/EcgRrAnalysis');
@@ -682,18 +683,38 @@ async function persistCombinedAnalysis(
  * Failures are logged and swallowed - an upload must not fail because a cached
  * report could not be cleared.
  */
+/**
+ * Delete every stored report for a session, events included.
+ *
+ * Events are deleted alongside the analyses: leaving them behind would strand
+ * rows that describe beats no analysis vouches for any more.
+ */
+async function deleteStoredReports(sessionId) {
+  // All reports come from the same beats, so they all go stale together.
+  await Promise.all([
+    EcgRrAnalysis.deleteOne({ sessionId }),
+    HrvAnalysis.deleteOne({ sessionId }),
+    RhythmAnalysis.deleteOne({ sessionId }),
+    RespirationAnalysis.deleteOne({ sessionId }),
+    Spo2Analysis.deleteOne({ sessionId }),
+    TemperatureAnalysis.deleteOne({ sessionId }),
+    CombinedAnalysis.deleteOne({ sessionId }),
+    EcgRrEvent.deleteMany({ sessionId }),
+    RhythmEvent.deleteMany({ sessionId }),
+    Spo2Event.deleteMany({ sessionId }),
+    TemperatureEvent.deleteMany({ sessionId }),
+  ]);
+}
+
 async function invalidateSessionAnalysis(sessionId) {
   try {
-    // Both derived reports come from the same beats, so both go stale together.
-    await Promise.all([
-      EcgRrAnalysis.deleteOne({ sessionId }),
-      HrvAnalysis.deleteOne({ sessionId }),
-      RhythmAnalysis.deleteOne({ sessionId }),
-      RespirationAnalysis.deleteOne({ sessionId }),
-      Spo2Analysis.deleteOne({ sessionId }),
-      TemperatureAnalysis.deleteOne({ sessionId }),
-      CombinedAnalysis.deleteOne({ sessionId }),
-    ]);
+    await deleteStoredReports(sessionId);
+    // The stored reports are gone, so generation is due again. Without this the
+    // session would keep claiming "ready" while holding no reports at all.
+    await Session.updateOne(
+      { id: sessionId },
+      { $set: { reportStatus: 'pending', reportGeneratedAt: null, reportError: null } }
+    );
   } catch (error) {
     console.error(`Failed to invalidate derived analysis for session ${sessionId}:`, error);
   }
@@ -715,6 +736,179 @@ async function recalculateSessionAnalysisSafe(sessionId, sessionDoc = null) {
 }
 
 /**
+ * Generate every report for a finished session, recording the outcome on the
+ * session itself.
+ *
+ * The plain "Safe" wrapper above swallows failures, which is right for keeping
+ * a recording stoppable but leaves no trace: a generation crash then looks
+ * exactly like "there was nothing to report". This records the state instead,
+ * so the UI can distinguish the two and an operator can find the failures.
+ *
+ * Reports whose own data is insufficient still count as a SUCCESSFUL
+ * generation - "ready" means the pipeline ran, not that every module produced
+ * numbers. Whether an individual report is usable stays that report's own
+ * `available`/`status` field.
+ */
+/**
+ * True elapsed length of a recording, in seconds.
+ *
+ * Session.duration is stored in WHOLE MINUTES, so it cannot be used for this:
+ * a 4 m 40 s recording rounds to 5 and would slip past a five-minute gate. The
+ * start and end timestamps are the only honest source.
+ *
+ * Returns null when the timestamps are unusable, which is treated as "unknown"
+ * rather than "zero" - refusing to generate on a parse failure would hide real
+ * recordings.
+ */
+function sessionDurationSec(session) {
+  if (!session) return null;
+  const start = Date.parse(session.startTime);
+  const end = Date.parse(session.endTime);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const sec = (end - start) / 1000;
+  return sec >= 0 ? sec : null;
+}
+
+/**
+ * Whether a recording is too short for reports to be generated at all.
+ *
+ * This is a product rule, not a statistical one: below this length the numbers
+ * would be arithmetically computable but not meaningful, and showing them
+ * invites a reader to trust a two-minute snapshot. A recording of unknown
+ * length is NOT treated as too short - see sessionDurationSec.
+ */
+function isSessionTooShort(session) {
+  const sec = sessionDurationSec(session);
+  if (sec === null) return false;
+  return sec < config.reports.minSessionDurationSec;
+}
+
+/**
+ * Human-readable recording length, e.g. "2m 30s".
+ */
+function formatDurationShort(sec) {
+  if (sec === null || sec === undefined) return 'unknown';
+  const whole = Math.max(0, Math.round(sec));
+  const m = Math.floor(whole / 60);
+  const s = whole % 60;
+  if (m === 0) return `${s}s`;
+  if (s === 0) return `${m}m`;
+  return `${m}m ${s}s`;
+}
+
+/**
+ * The response body for a recording too short to report on.
+ *
+ * Returned with HTTP 200, not an error: nothing went wrong, the recording is
+ * simply below the length at which these reports mean anything. Sending a 500
+ * here is what produced the "Unable to load" state that reads like a fault.
+ *
+ * It carries the same session identity fields as a real report so the UI can
+ * render the page header without special-casing, plus the numbers needed to
+ * explain the rule: how long this recording was, and how long it needed to be.
+ */
+function tooShortReportPayload(session) {
+  const sec = sessionDurationSec(session);
+  const minimum = config.reports.minSessionDurationSec;
+  return {
+    sessionId: session.id,
+    sessionName: session.name || null,
+    userId: session.userId,
+    userName: session.userName,
+    deviceId: session.deviceId,
+    startTime: session.startTime,
+    endTime: session.endTime,
+
+    reportStatus: 'too_short',
+    reportGeneratedAt: null,
+    reportError: null,
+
+    available: false,
+    status: 'too_short',
+    unavailableReason: 'session_too_short',
+    recordingDurationSec: sec,
+    minimumDurationSec: minimum,
+    message:
+      `No reports were generated for this recording. It lasted ${formatDurationShort(sec)}, ` +
+      `and reports require at least ${formatDurationShort(minimum)} of recording.`,
+    unavailableMessage:
+      `No reports were generated for this recording. It lasted ${formatDurationShort(sec)}, ` +
+      `and reports require at least ${formatDurationShort(minimum)} of recording.`,
+  };
+}
+
+async function generateSessionReports(sessionId, sessionDoc = null) {
+  const marked = await Session.findOneAndUpdate(
+    { id: sessionId },
+    {
+      $set: { reportStatus: 'generating', reportError: null },
+      $inc: { reportAttempts: 1 },
+    },
+    { new: true }
+  );
+  if (!marked) return { status: 'missing_session', analysis: null };
+
+  // Below the minimum length, generate nothing. This lives here rather than in
+  // the stop handler so EVERY trigger honours it - otherwise simply opening the
+  // report page would lazily generate the reports the rule just refused.
+  if (isSessionTooShort(sessionDoc || marked)) {
+    // Discard anything previously stored for this session, so a short recording
+    // cannot keep showing reports it is no longer entitled to.
+    await deleteStoredReports(sessionId);
+    await Session.updateOne(
+      { id: sessionId },
+      {
+        $set: {
+          reportStatus: 'too_short',
+          reportGeneratedAt: null,
+          reportError: null,
+        },
+      }
+    );
+    return { status: 'too_short', analysis: null };
+  }
+
+  try {
+    const analysis = await recalculateSessionAnalysis(sessionId, sessionDoc);
+    await Session.updateOne(
+      { id: sessionId },
+      { $set: { reportStatus: 'ready', reportGeneratedAt: new Date(), reportError: null } }
+    );
+    return { status: 'ready', analysis };
+  } catch (error) {
+    console.error(`Report generation failed for session ${sessionId}:`, error);
+    await Session.updateOne(
+      { id: sessionId },
+      {
+        $set: {
+          reportStatus: 'failed',
+          // Keep it short: this is surfaced in an API response.
+          reportError: String(error && error.message ? error.message : error).slice(0, 500),
+        },
+      }
+    ).catch(() => {});
+    return { status: 'failed', analysis: null, error };
+  }
+}
+
+/**
+ * Queue report generation to run after the current response has been sent.
+ *
+ * Analysing a long recording is not something a device should wait on: the
+ * session is already saved by this point, and a client timeout on the stop
+ * request would make the app believe the recording failed when it did not.
+ * The session is marked `pending` first, so a caller polling immediately sees
+ * "queued" rather than an absence.
+ */
+function queueSessionReports(sessionId) {
+  setImmediate(() => {
+    generateSessionReports(sessionId).catch((error) => {
+      console.error(`Queued report generation crashed for ${sessionId}:`, error);
+    });
+  });
+}
+
+/**
  * Shape a stored analysis (plus its events) into the report API response.
  */
 function toReportResponse(session, analysis, events) {
@@ -726,6 +920,11 @@ function toReportResponse(session, analysis, events) {
     deviceId: session.deviceId,
     startTime: session.startTime,
     endTime: session.endTime,
+    // Generation state of the session as a whole, so a client can tell
+    // "not generated yet" from "generated, and this report has no data".
+    reportStatus: session.reportStatus || 'not_started',
+    reportGeneratedAt: session.reportGeneratedAt || null,
+    reportError: session.reportError || null,
     recordingDurationSec: analysis.recordingDurationSec ?? null,
     analysedAt: analysis.analysedAt || null,
 
@@ -806,6 +1005,11 @@ function toHrvReportResponse(session, hrv) {
     sessionId: session.id,
     sessionName: session.name || null,
     userId: session.userId,
+    // Generation state of the session as a whole, so a client can tell
+    // "not generated yet" from "generated, and this report has no data".
+    reportStatus: session.reportStatus || 'not_started',
+    reportGeneratedAt: session.reportGeneratedAt || null,
+    reportError: session.reportError || null,
     userName: session.userName,
     deviceId: session.deviceId,
     startTime: session.startTime,
@@ -884,6 +1088,11 @@ function toRhythmReportResponse(session, rhythm, events) {
     sessionId: session.id,
     sessionName: session.name || null,
     userId: session.userId,
+    // Generation state of the session as a whole, so a client can tell
+    // "not generated yet" from "generated, and this report has no data".
+    reportStatus: session.reportStatus || 'not_started',
+    reportGeneratedAt: session.reportGeneratedAt || null,
+    reportError: session.reportError || null,
     userName: session.userName,
     deviceId: session.deviceId,
     startTime: session.startTime,
@@ -958,6 +1167,11 @@ function toRespirationReportResponse(session, resp) {
     sessionId: session.id,
     sessionName: session.name || null,
     userId: session.userId,
+    // Generation state of the session as a whole, so a client can tell
+    // "not generated yet" from "generated, and this report has no data".
+    reportStatus: session.reportStatus || 'not_started',
+    reportGeneratedAt: session.reportGeneratedAt || null,
+    reportError: session.reportError || null,
     userName: session.userName,
     deviceId: session.deviceId,
     startTime: session.startTime,
@@ -1028,6 +1242,11 @@ function sessionMeta(session, doc) {
     sessionId: session.id,
     sessionName: session.name || null,
     userId: session.userId,
+    // Generation state of the session as a whole, so a client can tell
+    // "not generated yet" from "generated, and this report has no data".
+    reportStatus: session.reportStatus || 'not_started',
+    reportGeneratedAt: session.reportGeneratedAt || null,
+    reportError: session.reportError || null,
     userName: session.userName,
     deviceId: session.deviceId,
     startTime: session.startTime,
@@ -1213,6 +1432,13 @@ function toCombinedReportResponse(session, doc) {
 }
 
 module.exports = {
+  generateSessionReports,
+  tooShortReportPayload,
+  formatDurationShort,
+  sessionDurationSec,
+  isSessionTooShort,
+  MIN_SESSION_DURATION_SEC: config.reports.minSessionDurationSec,
+  queueSessionReports,
   loadRPeaks,
   loadPpgSamples,
   loadVitalsRows,

@@ -36,6 +36,13 @@ module.exports = {
     senderEmail: process.env.BREVO_SENDER_EMAIL || '',
     frontendUrl: process.env.FRONTEND_URL || 'https://admin-ecg.netlify.app',
   },
+  reports: {
+    // A recording shorter than this generates no reports. Short recordings
+    // cannot support the analysis: HRV conventions want minutes of data, the
+    // respiratory band bottoms out at 0.1 Hz (a 10 s cycle), and a baseline
+    // needs enough history to be a baseline at all.
+    minSessionDurationSec: parseInt(process.env.MIN_REPORT_SESSION_SEC, 10) || 300,
+  },
   geocoding: {
     // 'nominatim' (OpenStreetMap, no API key) | 'google' (needs a key) | 'none'.
     // Set to 'none' to disable outbound reverse-geocoding entirely; stored

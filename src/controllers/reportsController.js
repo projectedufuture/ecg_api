@@ -12,6 +12,9 @@ const TemperatureEvent = require('../models/TemperatureEvent');
 const CombinedAnalysis = require('../models/CombinedAnalysis');
 const {
   recalculateSessionAnalysis,
+  generateSessionReports,
+  isSessionTooShort,
+  tooShortReportPayload,
   toReportResponse,
   toHrvReportResponse,
   toRhythmReportResponse,
@@ -52,11 +55,20 @@ async function getEcgRrReport(req, res) {
     if (!session) {
       return res.status(404).json({ success: false, data: null, error: 'Session not found.' });
     }
+    // A recording below the minimum length generates no reports at all, so
+    // answer with the rule rather than attempting generation. HTTP 200: the
+    // request succeeded, there is simply nothing to report on.
+    if (isSessionTooShort(session)) {
+      return res.json({ success: true, data: tooShortReportPayload(session), error: null });
+    }
 
     let analysis = await EcgRrAnalysis.findOne({ sessionId: session.id }).lean();
 
     if (!analysis) {
-      analysis = await recalculateSessionAnalysis(session.id, session);
+      // generateSessionReports returns { status, analysis } so the session's
+      // reportStatus is maintained even when a report request is what caused
+      // the generation.
+      ({ analysis } = await generateSessionReports(session.id, session));
     }
 
     if (!analysis) {
@@ -95,8 +107,14 @@ async function recalculateEcgRrReport(req, res) {
     if (!session) {
       return res.status(404).json({ success: false, data: null, error: 'Session not found.' });
     }
+    // A recording below the minimum length generates no reports at all, so
+    // answer with the rule rather than attempting generation. HTTP 200: the
+    // request succeeded, there is simply nothing to report on.
+    if (isSessionTooShort(session)) {
+      return res.json({ success: true, data: tooShortReportPayload(session), error: null });
+    }
 
-    const analysis = await recalculateSessionAnalysis(session.id, session);
+    const { analysis } = await generateSessionReports(session.id, session);
     if (!analysis) {
       return res
         .status(500)
@@ -133,11 +151,17 @@ async function getHrvReport(req, res) {
     if (!session) {
       return res.status(404).json({ success: false, data: null, error: 'Session not found.' });
     }
+    // A recording below the minimum length generates no reports at all, so
+    // answer with the rule rather than attempting generation. HTTP 200: the
+    // request succeeded, there is simply nothing to report on.
+    if (isSessionTooShort(session)) {
+      return res.json({ success: true, data: tooShortReportPayload(session), error: null });
+    }
 
     let hrv = await HrvAnalysis.findOne({ sessionId: session.id }).lean();
 
     if (!hrv) {
-      await recalculateSessionAnalysis(session.id, session);
+      await generateSessionReports(session.id, session);
       hrv = await HrvAnalysis.findOne({ sessionId: session.id }).lean();
     }
 
@@ -173,6 +197,9 @@ async function getHrvTrend(req, res) {
     if (!session) {
       return res.status(404).json({ success: false, data: null, error: 'Session not found.' });
     }
+    // NOT gated on this session's length: the trend describes the user's OTHER
+    // sessions, and a short recording here says nothing about those. Sessions
+    // too short to analyse simply contribute no point to it.
 
     // Scope the trend to sessions the caller may see, then join their HRV results.
     const sessionFilter = { userId: session.userId };
@@ -239,10 +266,16 @@ async function getRhythmReport(req, res) {
     if (!session) {
       return res.status(404).json({ success: false, data: null, error: 'Session not found.' });
     }
+    // A recording below the minimum length generates no reports at all, so
+    // answer with the rule rather than attempting generation. HTTP 200: the
+    // request succeeded, there is simply nothing to report on.
+    if (isSessionTooShort(session)) {
+      return res.json({ success: true, data: tooShortReportPayload(session), error: null });
+    }
 
     let rhythm = await RhythmAnalysis.findOne({ sessionId: session.id }).lean();
     if (!rhythm) {
-      await recalculateSessionAnalysis(session.id, session);
+      await generateSessionReports(session.id, session);
       rhythm = await RhythmAnalysis.findOne({ sessionId: session.id }).lean();
     }
     if (!rhythm) {
@@ -277,10 +310,16 @@ async function getRespirationReport(req, res) {
     if (!session) {
       return res.status(404).json({ success: false, data: null, error: 'Session not found.' });
     }
+    // A recording below the minimum length generates no reports at all, so
+    // answer with the rule rather than attempting generation. HTTP 200: the
+    // request succeeded, there is simply nothing to report on.
+    if (isSessionTooShort(session)) {
+      return res.json({ success: true, data: tooShortReportPayload(session), error: null });
+    }
 
     let resp = await RespirationAnalysis.findOne({ sessionId: session.id }).lean();
     if (!resp) {
-      await recalculateSessionAnalysis(session.id, session);
+      await generateSessionReports(session.id, session);
       resp = await RespirationAnalysis.findOne({ sessionId: session.id }).lean();
     }
     if (!resp) {
@@ -317,9 +356,15 @@ function makeReportHandler({ label, Model, EventModel, sortEvents, mapper }) {
         return res.status(404).json({ success: false, data: null, error: 'Session not found.' });
       }
 
+      // Same rule as the hand-written handlers: below the minimum recording
+      // length, answer with the rule instead of generating anything.
+      if (isSessionTooShort(session)) {
+        return res.json({ success: true, data: tooShortReportPayload(session), error: null });
+      }
+
       let doc = await Model.findOne({ sessionId: session.id }).lean();
       if (!doc) {
-        await recalculateSessionAnalysis(session.id, session);
+        await generateSessionReports(session.id, session);
         doc = await Model.findOne({ sessionId: session.id }).lean();
       }
       if (!doc) {

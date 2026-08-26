@@ -27,6 +27,31 @@ const sessionSchema = new mongoose.Schema(
       accuracy: { type: Number, default: null },
       address: { type: String, default: null },
     },
+
+    // ── Report generation state ──────────────────────────────────────
+    //
+    // Reports are derived when the recording finishes. Without a status the
+    // UI cannot tell "not generated yet" from "generated, and there genuinely
+    // was nothing to report" - both would render as an empty report. Nor
+    // would a generation failure leave any trace at all.
+    //
+    //   not_started - the recording has not finished yet
+    //   pending     - finished, generation queued
+    //   generating  - generation in progress
+    //   ready       - generation completed (individual reports may still be
+    //                 unavailable on their own merits, e.g. no beats recorded)
+    //   failed      - generation threw; reportError says what happened
+    //   too_short   - the recording is below the minimum length for reports to
+    //                 mean anything, so none were generated
+    reportStatus: {
+      type: String,
+      enum: ['not_started', 'pending', 'generating', 'ready', 'failed', 'too_short'],
+      default: 'not_started',
+    },
+    reportGeneratedAt: { type: Date, default: null },
+    reportError: { type: String, default: null },
+    // Counts generation runs, so a session stuck in a retry loop is visible.
+    reportAttempts: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
@@ -58,6 +83,9 @@ sessionSchema.methods.toFrontend = function () {
     minSpo2: this.minSpo2 || 0,
     maxSpo2: this.maxSpo2 || 0,
     location: this.location || null,
+    reportStatus: this.reportStatus || 'not_started',
+    reportGeneratedAt: this.reportGeneratedAt || null,
+    reportError: this.reportError || null,
   };
 };
 

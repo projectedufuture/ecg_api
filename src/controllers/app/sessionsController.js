@@ -15,7 +15,7 @@ const Spo2Event = require('../../models/Spo2Event');
 const TemperatureAnalysis = require('../../models/TemperatureAnalysis');
 const TemperatureEvent = require('../../models/TemperatureEvent');
 const CombinedAnalysis = require('../../models/CombinedAnalysis');
-const { recalculateSessionAnalysisSafe } = require('../../services/ecgRrService');
+const { queueSessionReports } = require('../../services/ecgRrService');
 const { attachCachedAddress, queueResolve } = require('../../services/locationService');
 
 function makeSessionId() {
@@ -125,7 +125,19 @@ async function stopSession(req, res) {
       return res.status(404).json({ success: false, data: null, error: 'Session not found.' });
     }
 
-    const end = endTime ? new Date(endTime).toISOString() : new Date().toISOString();
+    // A client-supplied endTime that predates the start makes the recording
+    // length unknowable - and an unknowable length cannot be measured against
+    // the minimum-duration rule. Rather than store contradictory timestamps,
+    // fall back to the server clock, which is at least monotonic with the
+    // start we recorded ourselves.
+    let end = endTime ? new Date(endTime).toISOString() : new Date().toISOString();
+    if (Date.parse(end) < Date.parse(session.startTime)) {
+      console.warn(
+        `Session ${sessionId}: endTime ${end} precedes startTime ${session.startTime}; ` +
+          'using the server clock instead.'
+      );
+      end = new Date().toISOString();
+    }
     session.endTime = end;
 
     // Duration is authoritative from the timestamps (in whole minutes), so it can
@@ -189,6 +201,12 @@ async function stopSession(req, res) {
 
     session.dataPoints = agg?.count?.[0]?.n || 0;
 
+    // The recording is finished, so report generation is due. Mark it queued
+    // BEFORE saving, so a client that reads the session immediately after the
+    // stop response sees "pending" rather than the stale "not_started".
+    session.reportStatus = 'pending';
+    session.reportError = null;
+
     await session.save();
 
     await User.findOneAndUpdate(
@@ -196,10 +214,12 @@ async function stopSession(req, res) {
       { $inc: { sessions: 1 }, $set: { lastActive: new Date().toISOString() } }
     );
 
-    // The recording is complete, so the ECG/RR analysis is computed and stored
-    // now. The report endpoint then only ever reads it (PART 30). Failures are
-    // swallowed inside the helper - stopping a recording must always succeed.
-    await recalculateSessionAnalysisSafe(session.id);
+    // Generate every report for the finished recording. This runs AFTER the
+    // response: the session is already saved, and analysing a long recording
+    // is not something the device should wait on - a client timeout here would
+    // make the app believe the recording failed when it did not. The outcome is
+    // recorded on the session as reportStatus, so nothing is silent.
+    queueSessionReports(session.id);
 
     return res.json({ success: true, data: session.toFrontend(), error: null });
   } catch (error) {

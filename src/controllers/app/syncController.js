@@ -4,7 +4,7 @@ const Session = require('../../models/Session');
 const Device = require('../../models/Device');
 const User = require('../../models/User');
 const { normalizeBeatFields, parseDeviceFrame } = require('../../utils/rPeakIngest');
-const { recalculateSessionAnalysisSafe } = require('../../services/ecgRrService');
+const { generateSessionReports } = require('../../services/ecgRrService');
 
 function readingId() {
   return `rdg_${crypto.randomBytes(8).toString('hex')}`;
@@ -135,7 +135,8 @@ async function syncData(req, res) {
       ...new Set(readingDocs.filter((d) => d.beat).map((d) => d.sessionId)),
     ];
     for (const sid of sessionsWithBeats) {
-      await recalculateSessionAnalysisSafe(sid);
+      // Status-aware so an offline upload leaves the same trace as a live stop.
+      await generateSessionReports(sid);
     }
 
     return res.json({

@@ -622,3 +622,96 @@ node scripts/backfill-addresses.js --force     # also redo names already set
 It only touches documents whose address is `null` (unless `--force`), never
 modifies coordinates, and shares the cache — so many documents at the same place
 cost one lookup. Distinct places take about a second each, by design.
+
+---
+
+## Report generation lifecycle
+
+Reports are derived when a **recording finishes** — not when someone opens the
+report page. Analysis runs once per session and is stored; the report endpoints
+then only read it.
+
+### Minimum recording length
+
+**A recording shorter than five minutes generates no reports at all.** Below
+that length the numbers would be arithmetically computable but not meaningful,
+and publishing them invites a reader to trust a two-minute snapshot.
+
+The session is marked `too_short` and every report endpoint answers **HTTP 200**
+with the rule — not an error, because nothing went wrong:
+
+```json
+{
+  "reportStatus": "too_short",
+  "available": false,
+  "unavailableReason": "session_too_short",
+  "recordingDurationSec": 120,
+  "minimumDurationSec": 300,
+  "message": "No reports were generated for this recording. It lasted 2m, and reports require at least 5m of recording."
+}
+```
+
+The admin UI renders one calm panel for the whole page instead of seven
+"unavailable" cards, and offers no Download PDF button.
+
+Two details that matter:
+
+- **The length is measured from the timestamps, never from `Session.duration`,**
+  which is stored in whole minutes. A 4 m 40 s recording rounds to 5 and would
+  slip past a gate placed on that field.
+- **The rule lives at the single generation choke point,** so every trigger
+  honours it. Placed only in the stop handler, simply opening the report page
+  would lazily generate the reports the rule had just refused — including an
+  explicit `recalculate`.
+
+A recording whose length cannot be determined (unparsable timestamps) is *not*
+refused: withholding reports because a timestamp failed to parse would hide real
+data. Relatedly, a client-supplied `endTime` that precedes the start is replaced
+with the server clock rather than stored, since contradictory timestamps make
+the length unknowable.
+
+Change the threshold with `MIN_REPORT_SESSION_SEC` (seconds).
+
+### Triggers
+
+| Event | What happens |
+|---|---|
+| `PUT /api/app/sessions/:id` (stop) | session marked `pending`, response returned, generation runs immediately after |
+| `POST /api/app/sync` | generation runs for each session that carried beats |
+| `POST /api/app/readings` with new beats | stored reports discarded, session marked `pending` again |
+| `GET .../reports/*` with no stored report | generated on demand as a safety net |
+| `POST .../reports/ecg-rr/recalculate` | forced regeneration |
+
+### Stopping never waits for analysis
+
+Generation is queued to run **after** the stop response is sent. The session is
+already saved by that point, and a client timeout on the stop request would
+otherwise make the app believe the recording had failed when it had not.
+Measured: a 150 s recording of 4800 readings stops in **69 ms** and its reports
+are complete a moment later, with no further request from the app.
+
+### `reportStatus` on the session
+
+Every session carries the state of its own report generation, returned by the
+session and report endpoints alike:
+
+| Status | Meaning |
+|---|---|
+| `not_started` | the recording has not finished yet |
+| `pending` | finished; generation queued |
+| `generating` | generation in progress |
+| `ready` | the pipeline ran to completion |
+| `failed` | generation threw; `reportError` says why |
+| `too_short` | the recording was below the minimum length; nothing was generated |
+
+Alongside it: `reportGeneratedAt` and `reportError`, plus `reportAttempts` so a
+session stuck in a retry loop is visible.
+
+**`ready` means the pipeline ran, not that every module produced numbers.**
+Whether an individual report is usable stays that report's own
+`available`/`status` field — a session with no beats recorded generates
+successfully and then correctly reports ECG/RR as unavailable.
+
+This distinction is the reason the status exists. Without it, "not generated
+yet", "generated and genuinely empty", and "generation crashed" all rendered as
+the same empty report, and a crash left no trace anywhere.
