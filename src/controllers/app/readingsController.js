@@ -3,6 +3,8 @@ const { validationResult } = require('express-validator');
 const Reading = require('../../models/Reading');
 const Session = require('../../models/Session');
 const Device = require('../../models/Device');
+const { normalizeBeatFields, parseDeviceFrame } = require('../../utils/rPeakIngest');
+const { invalidateSessionAnalysis } = require('../../services/ecgRrService');
 
 const MAX_BATCH = 5000;
 
@@ -45,7 +47,28 @@ async function uploadReadings(req, res) {
         .json({ success: false, data: null, error: 'Device not paired to this user.' });
     }
 
-    const docs = readings.map((r) => ({
+    // A reading may arrive either as explicit JSON fields or as the raw device
+    // frame ("ECG:1343,HR:0,TEMP:30.84,..."). Parsing the frame server-side
+    // keeps one authoritative parser; explicit JSON fields still win, so an app
+    // can send both and override anything it has already decoded.
+    const rejectedFrames = [];
+    const merged = readings.map((r, i) => {
+      const raw = r.raw ?? r.frame;
+      if (typeof raw !== 'string') return r;
+      const parsed = parseDeviceFrame(raw);
+      if (!parsed) {
+        rejectedFrames.push(i);
+        return r;
+      }
+      // Explicit fields take precedence over the parsed frame.
+      const out = { ...parsed };
+      for (const [k, v] of Object.entries(r)) {
+        if (v !== undefined && k !== 'raw' && k !== 'frame') out[k] = v;
+      }
+      return out;
+    });
+
+    const docs = merged.map((r) => ({
       id: readingId(),
       sessionId,
       userId: req.user.userId,
@@ -57,6 +80,7 @@ async function uploadReadings(req, res) {
       hr: r.hr !== undefined ? Number(r.hr) : 0,
       spo2: r.spo2 !== undefined ? Number(r.spo2) : 0,
       clientId: session.clientId || 'CLIENT-001',
+      ...normalizeBeatFields(r),
     }));
 
     await Reading.insertMany(docs, { ordered: false });
@@ -67,9 +91,23 @@ async function uploadReadings(req, res) {
     device.lastSeen = new Date().toISOString();
     await device.save();
 
+    // New beats change the RR sequence, so any stored ECG/RR report for this
+    // session is now stale. Dropping it is cheap; the next report request
+    // recomputes from the full set of readings (PART 30).
+    if (docs.some((d) => d.beat)) {
+      await invalidateSessionAnalysis(sessionId);
+    }
+
     return res.status(201).json({
       success: true,
-      data: { inserted: docs.length, sessionId, totalDataPoints: session.dataPoints },
+      data: {
+        inserted: docs.length,
+        sessionId,
+        totalDataPoints: session.dataPoints,
+        // Report unparsable frames explicitly rather than dropping them
+        // quietly - a firmware field rename should be visible, not silent.
+        ...(rejectedFrames.length ? { unparsableFrames: rejectedFrames.length } : {}),
+      },
       error: null,
     });
   } catch (error) {

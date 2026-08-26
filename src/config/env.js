@@ -36,6 +36,24 @@ module.exports = {
     senderEmail: process.env.BREVO_SENDER_EMAIL || '',
     frontendUrl: process.env.FRONTEND_URL || 'https://admin-ecg.netlify.app',
   },
+  geocoding: {
+    // 'nominatim' (OpenStreetMap, no API key) | 'google' (needs a key) | 'none'.
+    // Set to 'none' to disable outbound reverse-geocoding entirely; stored
+    // coordinates are then shown as raw numbers, exactly as before.
+    provider: (process.env.GEOCODING_PROVIDER || 'nominatim').toLowerCase(),
+    googleApiKey: process.env.GOOGLE_MAPS_API_KEY || '',
+    nominatimUrl: process.env.NOMINATIM_URL || 'https://nominatim.openstreetmap.org/reverse',
+    // Nominatim's usage policy REQUIRES an identifying User-Agent with a way
+    // to make contact. Requests without one are blocked.
+    userAgent:
+      process.env.GEOCODING_USER_AGENT ||
+      'BiotexAdmin/1.0 (+https://admin-ecg.netlify.app)',
+    // Nominatim asks for a maximum of one request per second, absolute.
+    minIntervalMs: parseInt(process.env.GEOCODING_MIN_INTERVAL_MS, 10) || 1100,
+    timeoutMs: parseInt(process.env.GEOCODING_TIMEOUT_MS, 10) || 6000,
+    cacheTtlDays: parseInt(process.env.GEOCODING_CACHE_TTL_DAYS, 10) || 90,
+    language: process.env.GEOCODING_LANGUAGE || 'en',
+  },
   rateLimit: {
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 15 * 60 * 1000,
     max: parseInt(process.env.RATE_LIMIT_MAX, 10) || 100,

@@ -4,6 +4,19 @@ const Session = require('../../models/Session');
 const Device = require('../../models/Device');
 const Reading = require('../../models/Reading');
 const User = require('../../models/User');
+const EcgRrAnalysis = require('../../models/EcgRrAnalysis');
+const EcgRrEvent = require('../../models/EcgRrEvent');
+const HrvAnalysis = require('../../models/HrvAnalysis');
+const RhythmAnalysis = require('../../models/RhythmAnalysis');
+const RhythmEvent = require('../../models/RhythmEvent');
+const RespirationAnalysis = require('../../models/RespirationAnalysis');
+const Spo2Analysis = require('../../models/Spo2Analysis');
+const Spo2Event = require('../../models/Spo2Event');
+const TemperatureAnalysis = require('../../models/TemperatureAnalysis');
+const TemperatureEvent = require('../../models/TemperatureEvent');
+const CombinedAnalysis = require('../../models/CombinedAnalysis');
+const { recalculateSessionAnalysisSafe } = require('../../services/ecgRrService');
+const { attachCachedAddress, queueResolve } = require('../../services/locationService');
 
 function makeSessionId() {
   return `sess_${crypto.randomBytes(8).toString('hex')}`;
@@ -36,12 +49,14 @@ async function createSession(req, res) {
     // user's last known location so admins always see something on the map.
     let sessionLocation = null;
     if (location && Number.isFinite(Number(location.lat)) && Number.isFinite(Number(location.lng))) {
-      sessionLocation = {
+      // Cache-only address lookup; a miss is resolved in the background after
+      // the response so starting a session never waits on a geocoding service.
+      sessionLocation = await attachCachedAddress({
         lat: Number(location.lat),
         lng: Number(location.lng),
         accuracy: location.accuracy != null ? Number(location.accuracy) : null,
         address: location.address || null,
-      };
+      });
       // Also update the user's "current" location since this is fresher.
       user.lastLocation = { ...sessionLocation, capturedAt: new Date() };
       await user.save();
@@ -73,6 +88,15 @@ async function createSession(req, res) {
       clientId: user.clientId || 'CLIENT-001',
       location: sessionLocation,
     });
+
+    if (sessionLocation && !sessionLocation.address) {
+      queueResolve({
+        userId: user.id,
+        sessionId: session.id,
+        lat: sessionLocation.lat,
+        lng: sessionLocation.lng,
+      });
+    }
 
     return res.status(201).json({
       success: true,
@@ -171,6 +195,11 @@ async function stopSession(req, res) {
       { id: req.user.userId },
       { $inc: { sessions: 1 }, $set: { lastActive: new Date().toISOString() } }
     );
+
+    // The recording is complete, so the ECG/RR analysis is computed and stored
+    // now. The report endpoint then only ever reads it (PART 30). Failures are
+    // swallowed inside the helper - stopping a recording must always succeed.
+    await recalculateSessionAnalysisSafe(session.id);
 
     return res.json({ success: true, data: session.toFrontend(), error: null });
   } catch (error) {
@@ -289,6 +318,21 @@ async function deleteSession(req, res) {
     }
 
     await Reading.deleteMany({ sessionId, userId: req.user.userId });
+
+    // Derived report data belongs to the deleted recording, so it goes with it.
+    await Promise.all([
+      EcgRrAnalysis.deleteOne({ sessionId }),
+      EcgRrEvent.deleteMany({ sessionId }),
+      HrvAnalysis.deleteOne({ sessionId }),
+      RhythmAnalysis.deleteOne({ sessionId }),
+      RhythmEvent.deleteMany({ sessionId }),
+      RespirationAnalysis.deleteOne({ sessionId }),
+      Spo2Analysis.deleteOne({ sessionId }),
+      Spo2Event.deleteMany({ sessionId }),
+      TemperatureAnalysis.deleteOne({ sessionId }),
+      TemperatureEvent.deleteMany({ sessionId }),
+      CombinedAnalysis.deleteOne({ sessionId }),
+    ]);
 
     return res.json({ success: true, data: null, error: null });
   } catch (error) {

@@ -3,6 +3,8 @@ const Reading = require('../../models/Reading');
 const Session = require('../../models/Session');
 const Device = require('../../models/Device');
 const User = require('../../models/User');
+const { normalizeBeatFields, parseDeviceFrame } = require('../../utils/rPeakIngest');
+const { recalculateSessionAnalysisSafe } = require('../../services/ecgRrService');
 
 function readingId() {
   return `rdg_${crypto.randomBytes(8).toString('hex')}`;
@@ -71,7 +73,25 @@ async function syncData(req, res) {
     }
 
     const readingDocs = [];
-    for (const r of readings) {
+    let unparsableFrames = 0;
+    for (const raw of readings) {
+      // Accept the raw device frame here too, so the offline path and the live
+      // path take an identical payload shape (see parseDeviceFrame).
+      let r = raw;
+      const frame = raw.raw ?? raw.frame;
+      if (typeof frame === 'string') {
+        const parsed = parseDeviceFrame(frame);
+        if (parsed) {
+          r = { ...parsed };
+          for (const [k, v] of Object.entries(raw)) {
+            if (v !== undefined && k !== 'raw' && k !== 'frame') r[k] = v;
+          }
+        } else {
+          unparsableFrames += 1;
+        }
+      }
+      if (r.ecgValue === undefined || r.ecgValue === null || r.ecgValue === '') continue;
+
       const mappedSessionId = sessionIdMap[r.sessionId] || r.sessionId;
       if (!mappedSessionId || !r.deviceId || !deviceIdSet.has(r.deviceId)) continue;
 
@@ -87,6 +107,7 @@ async function syncData(req, res) {
         hr: r.hr !== undefined ? Number(r.hr) : 0,
         spo2: r.spo2 !== undefined ? Number(r.spo2) : 0,
         clientId: user.clientId || 'CLIENT-001',
+        ...normalizeBeatFields(r),
       });
     }
 
@@ -107,11 +128,22 @@ async function syncData(req, res) {
     user.lastActive = new Date().toISOString();
     await user.save();
 
+    // An offline sync delivers a complete recording, so the ECG/RR analysis is
+    // computed and persisted here rather than on first report request. Only
+    // sessions that actually received beats are analysed.
+    const sessionsWithBeats = [
+      ...new Set(readingDocs.filter((d) => d.beat).map((d) => d.sessionId)),
+    ];
+    for (const sid of sessionsWithBeats) {
+      await recalculateSessionAnalysisSafe(sid);
+    }
+
     return res.json({
       success: true,
       data: {
         sessionsSynced: sessionsCreated.length,
         readingsSynced: readingDocs.length,
+        ...(unparsableFrames ? { unparsableFrames } : {}),
         sessionIdMap,
       },
       error: null,

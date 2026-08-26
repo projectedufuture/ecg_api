@@ -1,5 +1,6 @@
 const { validationResult } = require('express-validator');
 const User = require('../../models/User');
+const { attachCachedAddress, queueResolve } = require('../../services/locationService');
 
 async function getMe(req, res) {
   try {
@@ -63,15 +64,22 @@ async function updateLocation(req, res) {
       return res.status(404).json({ success: false, data: null, error: 'User not found.' });
     }
 
-    user.lastLocation = {
+    // Attach a place name so admins see somewhere recognisable rather than raw
+    // coordinates. Only the cache is consulted here - a miss is resolved in the
+    // background below, so this request never waits on a third-party service.
+    user.lastLocation = await attachCachedAddress({
       lat: Number(lat),
       lng: Number(lng),
       accuracy: accuracy != null ? Number(accuracy) : null,
       address: address || null,
       capturedAt: new Date(),
-    };
+    });
     user.lastActive = new Date().toISOString();
     await user.save();
+
+    if (!user.lastLocation.address) {
+      queueResolve({ userId: user.id, lat: Number(lat), lng: Number(lng) });
+    }
 
     return res.json({
       success: true,

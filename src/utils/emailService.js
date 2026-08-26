@@ -25,7 +25,7 @@ async function sendPasswordResetEmail({ toEmail, toName, resetUrl }) {
       email: config.email.senderEmail,
     },
     to: [{ email: toEmail, name: toName }],
-    subject: 'Password Reset Request – ECG Admin Panel',
+    subject: 'Password Reset Request – Biotex Admin Panel',
     htmlContent: `
 <!DOCTYPE html>
 <html lang="en">
@@ -47,7 +47,7 @@ async function sendPasswordResetEmail({ toEmail, toName, resetUrl }) {
                 <span style="font-size:24px;">🔒</span>
               </div>
               <h1 style="color:${T.heading};font-size:22px;font-weight:700;margin:0 0 6px;">Reset Your Password</h1>
-              <p style="color:${T.subheading};font-size:14px;margin:0;">ECG Admin Panel – Wearable Wellness Platform</p>
+              <p style="color:${T.subheading};font-size:14px;margin:0;">Biotex Admin Panel – Wearable Wellness Platform</p>
             </td>
           </tr>
 
@@ -93,7 +93,7 @@ async function sendPasswordResetEmail({ toEmail, toName, resetUrl }) {
           <tr>
             <td style="padding:20px 40px;text-align:center;">
               <p style="color:${T.footer};font-size:12px;margin:0;">
-                © ${new Date().getFullYear()} ECG Admin Panel · Wellness-grade platform — Not for medical diagnosis
+                © ${new Date().getFullYear()} Biotex Admin Panel · Wellness-grade platform — Not for medical diagnosis
               </p>
             </td>
           </tr>
@@ -130,7 +130,7 @@ async function sendAppPasswordResetEmail({ toEmail, toName, resetUrl }) {
       email: config.email.senderEmail,
     },
     to: [{ email: toEmail, name: toName }],
-    subject: 'Reset your ECG Wellness password',
+    subject: 'Reset your Biotex Wellness password',
     htmlContent: `
 <!DOCTYPE html>
 <html lang="en">
