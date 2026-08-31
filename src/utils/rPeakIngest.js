@@ -54,6 +54,30 @@ const SENTINELS = {
   RR_NEGATIVE: -1,
 };
 
+/**
+ * Tri-state flag: true, false, or null for "the firmware did not say".
+ *
+ * Distinct from toBool, which collapses an absent flag to false. For a validity
+ * flag that difference is the whole point: "the device rejected this beat" and
+ * "the device did not tell us" must not be stored as the same thing.
+ */
+function toTriStateBool(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (value === 1) return true;
+    if (value === 0) return false;
+    return null;
+  }
+  if (typeof value === 'string') {
+    const v = value.trim().toLowerCase();
+    if (v === '1' || v === 'true' || v === 'yes' || v === 'valid') return true;
+    if (v === '0' || v === 'false' || v === 'no' || v === 'invalid') return false;
+    return null;
+  }
+  return null;
+}
+
 /** Coerce the loose truthy forms firmware uses (1, "1", true) to a boolean. */
 function toBool(value) {
   if (value === undefined || value === null) return false;
@@ -128,6 +152,33 @@ function normalizeBeatFields(r) {
   const ppgIr = toFiniteNumber(r.ppgIr ?? r.ir ?? r.IR);
   const ppgRed = toFiniteNumber(r.ppgRed ?? r.red ?? r.RED);
 
+  // Packet counter. The one field that makes transmission loss detectable, so
+  // it is read from every spelling the firmware might use.
+  const seq = toFiniteNumber(r.seq ?? r.SEQ ?? r.sequence ?? r.SEQUENCE);
+
+  // Raw and filtered ECG, kept apart. ecgValue (set by the caller) stays the
+  // primary sample; these record which of the two it came from.
+  const ecgRaw = toSignedNumber(r.ecgRaw ?? r.ECG_RAW ?? r.ecg_raw);
+  const ecgFiltered = toSignedNumber(r.ecgFiltered ?? r.ECG_FILTERED ?? r.ecg_filtered);
+
+  // The device's own verdicts, stored as reported. Tri-state, so "not reported"
+  // is never conflated with "reported as invalid".
+  const beatValid = toTriStateBool(r.beatValid ?? r.BEAT_VALID);
+  const rrValid = toTriStateBool(r.rrValid ?? r.RR_VALID);
+  const hrEcgValid = toTriStateBool(r.hrEcgValid ?? r.HR_ECG_VALID);
+  const pqrstValid = toTriStateBool(r.pqrstValid ?? r.PQRST_VALID);
+
+  // Instantaneous vs averaged HR. An average hides exactly the beat-to-beat
+  // variation the RR analysis exists to measure, so they are not merged.
+  const hrInstantRaw = toSignedNumber(r.hrInstant ?? r.HR_INSTANT);
+  const hrAvgRaw = toSignedNumber(r.hrAvg ?? r.HR_AVG);
+
+  const rejectReasonRaw = r.rejectReason ?? r.REJECT_REASON ?? r.reject_reason ?? null;
+  const rejectReason =
+    typeof rejectReasonRaw === 'string' && rejectReasonRaw.trim()
+      ? rejectReasonRaw.trim().slice(0, 200)
+      : null;
+
   return {
     beat,
     rPeakTimestamp,
@@ -139,6 +190,18 @@ function normalizeBeatFields(r) {
     ecgQuality: ecgQuality !== null && ecgQuality >= 0 ? ecgQuality : null,
     ppgIr,
     ppgRed,
+
+    seq,
+    ecgRaw,
+    ecgFiltered,
+    beatValid,
+    rrValid,
+    hrEcgValid,
+    pqrstValid,
+    // HR:0 is the "not measured" sentinel here too.
+    hrInstant: hrInstantRaw !== null && hrInstantRaw > SENTINELS.HR_ZERO ? hrInstantRaw : null,
+    hrAvg: hrAvgRaw !== null && hrAvgRaw > SENTINELS.HR_ZERO ? hrAvgRaw : null,
+    rejectReason,
   };
 }
 
@@ -178,7 +241,28 @@ function normalizeVitals(r) {
  * @param {string} raw One frame line.
  * @returns {object|null} Canonical reading fields, or null if unparsable.
  */
-function parseDeviceFrame(raw) {
+/**
+ * Split one device frame into its field map and its ECG sample block.
+ *
+ * The current firmware batches ECG: N samples follow a single ECG key,
+ * comma-separated, e.g.
+ *
+ *   N:5,RATE_HZ:128,SEQ_START:10240,ECG_FILTERED:1342,1351,1349,1338,1330,HR:72,...
+ *
+ * Splitting the frame on commas FIRST is fatal here - samples 2..N are bare
+ * numbers with no colon, so a KEY:VALUE loop drops them and keeps only the
+ * first. The sample block is therefore lifted out BEFORE the CSV split, by
+ * finding the ECG key and taking everything up to the next KEY: token. That
+ * also makes the extraction independent of the separator the firmware chooses
+ * between samples.
+ */
+const ECG_KEY_RE = /\b(ECG_FILTERED|ECG_RAW|ECGFILTERED|ECGRAW|ECG_FILT|ECG)\s*:/i;
+// The next field key, which is where the sample block ends.
+const NEXT_KEY_RE = /[A-Za-z_][A-Za-z0-9_]*\s*:/;
+// Anything that cannot be part of a number separates two samples.
+const SAMPLE_SEP_RE = /[^0-9eE+\-.]+/;
+
+function splitFrame(raw) {
   if (typeof raw !== 'string' || !raw.trim()) return null;
 
   // Drop a leading timestamp/direction prefix such as "[15:50:31.460] RX: ".
@@ -186,8 +270,34 @@ function parseDeviceFrame(raw) {
     .replace(/^\s*\[[^\]]*\]\s*/, '')
     .replace(/^\s*(?:RX|TX)\s*:\s*/i, '');
 
+  let remainder = body;
+  let ecgKind = null;
+  const samples = [];
+
+  const keyMatch = ECG_KEY_RE.exec(body);
+  if (keyMatch) {
+    const keyName = keyMatch[1].toUpperCase();
+    ecgKind = keyName === 'ECG' ? 'legacy' : keyName.includes('FILT') ? 'filtered' : 'raw';
+
+    const valueStart = keyMatch.index + keyMatch[0].length;
+    const after = body.slice(valueStart);
+    const next = NEXT_KEY_RE.exec(after);
+    const valueEnd = next === null ? body.length : valueStart + next.index;
+    const block = body.slice(valueStart, valueEnd);
+
+    for (const token of block.split(SAMPLE_SEP_RE)) {
+      if (!token) continue;
+      const v = Number(token);
+      if (Number.isFinite(v)) samples.push(v);
+    }
+
+    // Excise the block, key included, so the CSV loop below never sees the
+    // bare sample numbers and cannot mis-parse one as a field.
+    remainder = body.slice(0, keyMatch.index) + body.slice(valueEnd);
+  }
+
   const fields = {};
-  for (const pair of body.split(',')) {
+  for (const pair of remainder.split(',')) {
     const idx = pair.indexOf(':');
     if (idx === -1) continue;
     const key = pair.slice(0, idx).trim().toUpperCase();
@@ -195,45 +305,218 @@ function parseDeviceFrame(raw) {
     if (key) fields[key] = value;
   }
 
-  // ECG is the one field a reading cannot do without.
-  const ecgValue = toSignedNumber(fields.ECG);
-  if (ecgValue === null) return null;
+  return { fields, samples, ecgKind };
+}
 
-  // Map the frame onto the canonical field names the ingest path already uses,
-  // then let the existing normalisers apply the sentinel and lead rules - so a
-  // raw frame and an equivalent JSON body reach the database identically.
-  const mapped = {
+/**
+ * Everything a frame says that is NOT the ECG samples themselves.
+ *
+ * These are per-FRAME values: one HR, one temperature, one BEAT flag covering
+ * the whole batch. They are not per-sample measurements and must not be
+ * multiplied into one reading per sample as though they were.
+ */
+function frameMetadata(split) {
+  const { fields, samples } = split;
+
+  const declaredCount = toFiniteNumber(fields.N);
+  const rateHz = toFiniteNumber(fields.RATE_HZ ?? fields.RATEHZ ?? fields.FS);
+  // SEQ_START is the sequence number of the FIRST sample in the batch. A
+  // legacy one-sample frame uses a bare SEQ, which means the same thing.
+  const seqStart = toFiniteNumber(fields.SEQ_START ?? fields.SEQSTART ?? fields.SEQ);
+
+  return {
+    seqStart,
+    rateHz,
+    declaredCount,
+    sampleCount: samples.length,
+    // N is a checksum on the extraction, not a truncation rule. Discarding
+    // real decoded samples to satisfy a header would be worse than the
+    // mismatch, so the disagreement is reported and every sample kept.
+    countMismatch:
+      declaredCount !== null && samples.length > 0 && declaredCount !== samples.length,
+    ecgKind: split.ecgKind,
+  };
+}
+
+/**
+ * PQRST morphology as the device reported it.
+ *
+ * The firmware leaves the PREVIOUS beat's values in the frame when
+ * PQRST_VALID is 0, so the flag has to gate them: without that, a stale
+ * complex would be attributed to the current beat.
+ */
+function framePqrst(fields) {
+  const valid = toTriStateBool(fields.PQRST_VALID ?? fields.PQRSTVALID);
+  if (valid !== true) return { pqrstValid: valid, pqrst: null };
+  return {
+    pqrstValid: true,
+    pqrst: {
+      p: toSignedNumber(fields.P),
+      q: toSignedNumber(fields.Q),
+      r: toSignedNumber(fields.R),
+      s: toSignedNumber(fields.S),
+      t: toSignedNumber(fields.T),
+      prMs: toSignedNumber(fields.PR),
+      qrsMs: toSignedNumber(fields.QRS),
+      qtMs: toSignedNumber(fields.QT),
+      qtcMs: toSignedNumber(fields.QTC),
+    },
+  };
+}
+
+/** The per-frame fields, mapped onto the canonical reading names. */
+function mappedFrameFields(fields, ecgRaw, ecgFiltered, ecgValue) {
+  return {
     ecgValue,
-    hr: fields.HR,
-    spo2: fields.SPO2,
+    ecgRaw,
+    ecgFiltered,
+    hr: fields.HR ?? fields.HR_INSTANT,
+    HR_INSTANT: fields.HR_INSTANT ?? fields.HR,
+    HR_AVG: fields.HR_AVG,
+    spo2: fields.SPO2 ?? fields.SP02,
     temperature: fields.TEMP,
     LEAD: fields.LEAD,
     BEAT: fields.BEAT,
+    BEAT_VALID: fields.BEAT_VALID,
     RR: fields.RR,
+    RR_VALID: fields.RR_VALID,
+    HR_ECG_VALID: fields.HR_ECG_VALID,
+    PQRST_VALID: fields.PQRST_VALID ?? fields.PQRSTVALID,
+    REJECT_REASON: fields.REJECT_REASON ?? fields.REJECT,
     QUALITY: fields.QUALITY,
     IR: fields.IR,
     RED: fields.RED,
     R_TIME: fields.R_TIME ?? fields.RTIME,
     beatConfidence: fields.CONF ?? fields.CONFIDENCE,
   };
+}
 
-  const vitals = normalizeVitals(mapped);
-  const temperature = toSignedNumber(fields.TEMP);
+/**
+ * Expand one device frame into ONE READING PER ECG SAMPLE.
+ *
+ * A batched frame carries N samples but only one set of vitals. Each sample
+ * becomes its own row so that:
+ *   - every sample gets its own SEQ (SEQ_START + i), which is what makes
+ *     transmission gaps detectable per sample rather than per frame, and
+ *   - the waveform keeps every sample the device actually sent.
+ *
+ * Per-sample timestamps are DERIVED from the frame's arrival time and the
+ * device's declared RATE_HZ. That is arithmetic on values the device reported,
+ * not invented data - but it is also not a measured per-sample clock, so it is
+ * only as good as RATE_HZ. Without a rate, every sample in the frame shares
+ * the frame timestamp rather than being spread over a guessed interval.
+ *
+ * The per-frame vitals (HR, TEMP, SPO2, BEAT, RR, PQRST) are attached ONLY to
+ * the first sample of the batch. Repeating them on all N rows would multiply
+ * one measurement into N and bias every average that reads those columns.
+ *
+ * @param {string} raw One frame.
+ * @param {string} frameTimestamp ISO timestamp for the frame.
+ * @returns {Array|null} Reading objects, or null if the frame carried no ECG.
+ */
+function expandDeviceFrame(raw, frameTimestamp) {
+  const split = splitFrame(raw);
+  if (!split) return null;
 
-  return {
-    ecgValue,
-    // Vitals keep the 0 = not-measured convention of the stored schema; the
-    // analysis layer converts those to null when loading.
-    hr: vitals.hr ?? 0,
-    spo2: vitals.spo2 ?? 0,
-    temperature: temperature !== null ? temperature : 0,
-    ...normalizeBeatFields(mapped),
-  };
+  const { fields, samples } = split;
+  const meta = frameMetadata(split);
+
+  if (!samples.length) return null;
+
+  const baseMs = Date.parse(frameTimestamp);
+  const haveBase = Number.isFinite(baseMs);
+  const stepMs = meta.rateHz && meta.rateHz > 0 ? 1000 / meta.rateHz : 0;
+
+  const rows = [];
+  for (let i = 0; i < samples.length; i += 1) {
+    const sample = samples[i];
+
+    // Which column the sample belongs in depends on what the device called it.
+    const ecgRaw = meta.ecgKind === 'filtered' ? null : sample;
+    const ecgFiltered = meta.ecgKind === 'filtered' ? sample : null;
+
+    // Only the first row of a batch carries the frame's vitals and flags.
+    const perFrame = i === 0 ? mappedFrameFields(fields, ecgRaw, ecgFiltered, sample) : null;
+
+    const row = {
+      ecgValue: sample,
+      ecgRaw,
+      ecgFiltered,
+      seq: meta.seqStart === null ? null : meta.seqStart + i,
+      timestamp: haveBase
+        ? new Date(baseMs + Math.round(i * stepMs)).toISOString()
+        : frameTimestamp,
+      sampleRateHz: meta.rateHz,
+      frameSampleCount: samples.length,
+      frameSampleIndex: i,
+    };
+
+    if (perFrame) {
+      const vitals = normalizeVitals(perFrame);
+      const { pqrstValid, pqrst } = framePqrst(fields);
+      Object.assign(row, {
+        hr: vitals.hr ?? 0,
+        spo2: vitals.spo2 ?? 0,
+        temperature: toSignedNumber(fields.TEMP) ?? 0,
+        ...normalizeBeatFields(perFrame),
+        pqrstValid,
+        pqrst,
+      });
+    } else {
+      // A sample with no vitals of its own. Zeros here are the schema's
+      // "not reported" defaults, not measurements - the analysis layer
+      // already treats 0 in these columns as absent.
+      Object.assign(row, {
+        hr: 0,
+        spo2: 0,
+        temperature: 0,
+        ...normalizeBeatFields({}),
+      });
+    }
+
+    // Restored AFTER the spreads: normalizeBeatFields derives seq/ecgRaw/
+    // ecgFiltered from the object it is given, which for a batched frame does
+    // not carry this sample's own values - so its nulls would overwrite them.
+    row.seq = meta.seqStart === null ? null : meta.seqStart + i;
+    row.ecgRaw = ecgRaw;
+    row.ecgFiltered = ecgFiltered;
+    row.ecgValue = sample;
+
+    rows.push(row);
+  }
+
+  rows.frameMeta = meta;
+  return rows;
+}
+
+/**
+ * Parse one device frame into a single reading.
+ *
+ * Kept for callers that want one row: it returns the FIRST sample of the frame.
+ * Anything ingesting a batched stream must use expandDeviceFrame instead, or it
+ * silently discards samples 2..N.
+ *
+ * @param {string} raw One frame line.
+ * @returns {object|null} Canonical reading fields, or null if unparsable.
+ */
+function parseDeviceFrame(raw) {
+  const rows = expandDeviceFrame(raw, null);
+  if (!rows || !rows.length) return null;
+  const first = { ...rows[0] };
+  // The single-row form has no frame position to report.
+  delete first.frameSampleCount;
+  delete first.frameSampleIndex;
+  delete first.timestamp;
+  return first;
 }
 
 module.exports = {
   parseDeviceFrame,
+  expandDeviceFrame,
+  splitFrame,
+  frameMetadata,
   normalizeBeatFields,
+  toTriStateBool,
   normalizeVitals,
   resolveLeadOff,
   toBool,

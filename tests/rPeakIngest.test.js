@@ -9,6 +9,8 @@ const assert = require('node:assert/strict');
 const { normalizeBeatFields } = require('../src/utils/rPeakIngest');
 
 test('a reading with no beat fields is not a beat', () => {
+  // Everything the firmware did not report stays null - never 0, never false
+  // where false would mean "the device said no".
   assert.deepEqual(normalizeBeatFields({ ecgValue: 512 }), {
     beat: false,
     rPeakTimestamp: null,
@@ -18,7 +20,33 @@ test('a reading with no beat fields is not a beat', () => {
     ecgQuality: null,
     ppgIr: null,
     ppgRed: null,
+    seq: null,
+    ecgRaw: null,
+    ecgFiltered: null,
+    beatValid: null,
+    rrValid: null,
+    hrEcgValid: null,
+    pqrstValid: null,
+    hrInstant: null,
+    hrAvg: null,
+    rejectReason: null,
   });
+});
+
+test('an unreported validity flag is null, not false', () => {
+  // "the device rejected this beat" and "the device did not say" must never be
+  // stored as the same value.
+  const absent = normalizeBeatFields({ ecgValue: 512 });
+  assert.equal(absent.beatValid, null);
+  assert.equal(absent.pqrstValid, null);
+
+  const rejected = normalizeBeatFields({ ecgValue: 512, BEAT_VALID: 0, PQRST_VALID: 0 });
+  assert.equal(rejected.beatValid, false);
+  assert.equal(rejected.pqrstValid, false);
+
+  const accepted = normalizeBeatFields({ ecgValue: 512, BEAT_VALID: 1, PQRST_VALID: 1 });
+  assert.equal(accepted.beatValid, true);
+  assert.equal(accepted.pqrstValid, true);
 });
 
 test('the documented JSON payload is accepted', () => {

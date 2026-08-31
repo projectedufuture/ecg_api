@@ -59,6 +59,52 @@ const readingSchema = new mongoose.Schema(
     // not stream raw photoplethysmography.
     ppgIr: { type: Number, default: null },
     ppgRed: { type: Number, default: null },
+
+    // ── Transmission sequence ──────────────────────────────────────
+    /**
+     * Device packet counter (SEQ). This is the ONLY evidence of what actually
+     * arrived over the radio: a missing SEQ proves samples were lost, and a
+     * repeated one proves a packet was delivered twice. Nothing downstream may
+     * invent a sample to fill a hole.
+     *
+     * Null for firmware that does not number its packets, in which case
+     * continuity cannot be verified at all.
+     */
+    seq: { type: Number, default: null },
+
+    // ── Raw vs filtered ECG ────────────────────────────────────────
+    /**
+     * The device reports both. They are stored separately and never conflated:
+     * the raw sample is the measurement, the filtered one is the device's
+     * interpretation of it. Analysis that needs to know what the sensor
+     * actually saw must be able to reach the raw value.
+     *
+     * `ecgValue` above remains the primary sample for backward compatibility
+     * and carries the raw value when both are present.
+     */
+    ecgRaw: { type: Number, default: null },
+    ecgFiltered: { type: Number, default: null },
+
+    // ── Device-reported validity flags ─────────────────────────────
+    // The firmware's own verdicts, stored as reported. The backend does not
+    // overwrite them: it adds its own transmission-integrity view alongside.
+    // Null means the firmware did not report that flag.
+    beatValid: { type: Boolean, default: null },
+    rrValid: { type: Boolean, default: null },
+    hrEcgValid: { type: Boolean, default: null },
+    pqrstValid: { type: Boolean, default: null },
+
+    // Instantaneous (beat-to-beat) and averaged heart rate, kept apart because
+    // an average hides exactly the variation the RR analysis exists to measure.
+    hrInstant: { type: Number, default: null },
+    hrAvg: { type: Number, default: null },
+
+    /**
+     * Why the device rejected this beat or sample, verbatim. Preserved rather
+     * than normalised: a firmware reason we do not recognise is still the most
+     * informative thing available about why a beat was dropped.
+     */
+    rejectReason: { type: String, default: null },
   },
   { timestamps: true }
 );
@@ -66,6 +112,8 @@ const readingSchema = new mongoose.Schema(
 readingSchema.index({ sessionId: 1, timestamp: 1 });
 // Supports the RR pipeline's "all R peaks for this session, in order" query.
 readingSchema.index({ sessionId: 1, beat: 1, rPeakTimestamp: 1 });
+// Supports the SEQ continuity scan, which must read packets in arrival order.
+readingSchema.index({ sessionId: 1, seq: 1 });
 readingSchema.index({ userId: 1 });
 readingSchema.index({ deviceId: 1 });
 readingSchema.index({ clientId: 1 });
@@ -85,6 +133,16 @@ readingSchema.methods.toFrontend = function () {
     rPeakTimestamp: this.rPeakTimestamp ?? null,
     beatConfidence: this.beatConfidence ?? null,
     leadOff: this.leadOff === true,
+    seq: this.seq ?? null,
+    ecgRaw: this.ecgRaw ?? null,
+    ecgFiltered: this.ecgFiltered ?? null,
+    beatValid: this.beatValid ?? null,
+    rrValid: this.rrValid ?? null,
+    hrEcgValid: this.hrEcgValid ?? null,
+    pqrstValid: this.pqrstValid ?? null,
+    hrInstant: this.hrInstant ?? null,
+    hrAvg: this.hrAvg ?? null,
+    rejectReason: this.rejectReason ?? null,
   };
 };
 

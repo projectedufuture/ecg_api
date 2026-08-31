@@ -3,7 +3,7 @@ const Reading = require('../../models/Reading');
 const Session = require('../../models/Session');
 const Device = require('../../models/Device');
 const User = require('../../models/User');
-const { normalizeBeatFields, parseDeviceFrame } = require('../../utils/rPeakIngest');
+const { normalizeBeatFields, expandDeviceFrame } = require('../../utils/rPeakIngest');
 const { generateSessionReports } = require('../../services/ecgRrService');
 
 function readingId() {
@@ -72,24 +72,36 @@ async function syncData(req, res) {
       sessionsCreated.push(session.id);
     }
 
+    // One posted frame can carry N ECG samples, so this loop expands each into
+    // its own row - the offline path must not lose samples the live path keeps.
     const readingDocs = [];
     let unparsableFrames = 0;
+    const expanded = [];
+
     for (const raw of readings) {
-      // Accept the raw device frame here too, so the offline path and the live
-      // path take an identical payload shape (see parseDeviceFrame).
-      let r = raw;
       const frame = raw.raw ?? raw.frame;
-      if (typeof frame === 'string') {
-        const parsed = parseDeviceFrame(frame);
-        if (parsed) {
-          r = { ...parsed };
-          for (const [k, v] of Object.entries(raw)) {
-            if (v !== undefined && k !== 'raw' && k !== 'frame') r[k] = v;
-          }
-        } else {
-          unparsableFrames += 1;
-        }
+      if (typeof frame !== 'string') {
+        expanded.push(raw);
+        continue;
       }
+      const rows = expandDeviceFrame(frame, raw.timestamp);
+      if (!rows || !rows.length) {
+        unparsableFrames += 1;
+        expanded.push(raw);
+        continue;
+      }
+      for (const row of rows) {
+        const out = { ...row };
+        for (const [k, v] of Object.entries(raw)) {
+          if (v === undefined || k === 'raw' || k === 'frame') continue;
+          if (k === 'timestamp' && rows.length > 1) continue;
+          out[k] = v;
+        }
+        expanded.push(out);
+      }
+    }
+
+    for (const r of expanded) {
       if (r.ecgValue === undefined || r.ecgValue === null || r.ecgValue === '') continue;
 
       const mappedSessionId = sessionIdMap[r.sessionId] || r.sessionId;

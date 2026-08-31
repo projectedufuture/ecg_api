@@ -2,7 +2,6 @@ const express = require('express');
 const { body } = require('express-validator');
 const appAuth = require('../../middleware/appAuth');
 const { uploadReadings, listReadings } = require('../../controllers/app/readingsController');
-const { parseDeviceFrame } = require('../../utils/rPeakIngest');
 
 const router = express.Router();
 
@@ -23,21 +22,11 @@ router.post(
       .isString()
       .isLength({ max: 2000 })
       .withMessage('raw must be a device frame string.'),
-    body('readings').custom((rows) => {
-      if (!Array.isArray(rows)) return true;
-      for (let i = 0; i < rows.length; i += 1) {
-        const r = rows[i] || {};
-        const hasEcg = r.ecgValue !== undefined && r.ecgValue !== null && r.ecgValue !== '';
-        const frame = r.raw ?? r.frame;
-        const hasFrame = typeof frame === 'string' && parseDeviceFrame(frame) !== null;
-        if (!hasEcg && !hasFrame) {
-          throw new Error(
-            `readings[${i}] needs either a numeric ecgValue or a parsable raw device frame.`
-          );
-        }
-      }
-      return true;
-    }),
+    // NOTE: there is deliberately no batch-level "every reading must have an
+    // ECG sample" check here. Failing the whole request on one malformed packet
+    // discards up to 5000 good readings with it, which is the worst possible
+    // outcome for a device that cannot re-send. Unusable readings are skipped
+    // individually and counted in the response instead - see uploadReadings.
     body('readings.*.hr').optional().isFloat({ min: 0 }).withMessage('hr must be a positive number.'),
     body('readings.*.spo2').optional().isFloat({ min: 0, max: 100 }).withMessage('spo2 must be 0–100.'),
     // R-peak / beat fields for ECG/RR analysis. All optional and additive, so
@@ -69,6 +58,37 @@ router.post(
       .optional()
       .isFloat({ min: 0 })
       .withMessage('ppgRed must be a non-negative raw PPG sample.'),
+    // Transmission sequence and the device's own validity flags. All optional
+    // and additive, so older firmware keeps working unchanged.
+    body('readings.*.seq')
+      .optional()
+      .isInt({ min: 0 })
+      .withMessage('seq must be a non-negative integer packet counter.'),
+    body('readings.*.ecgRaw').optional().isFloat().withMessage('ecgRaw must be numeric.'),
+    body('readings.*.ecgFiltered').optional().isFloat().withMessage('ecgFiltered must be numeric.'),
+    body('readings.*.beatValid').optional().isBoolean().withMessage('beatValid must be a boolean.'),
+    body('readings.*.rrValid').optional().isBoolean().withMessage('rrValid must be a boolean.'),
+    body('readings.*.hrEcgValid')
+      .optional()
+      .isBoolean()
+      .withMessage('hrEcgValid must be a boolean.'),
+    body('readings.*.pqrstValid')
+      .optional()
+      .isBoolean()
+      .withMessage('pqrstValid must be a boolean.'),
+    body('readings.*.hrInstant')
+      .optional()
+      .isFloat({ min: 0 })
+      .withMessage('hrInstant must be a positive number.'),
+    body('readings.*.hrAvg')
+      .optional()
+      .isFloat({ min: 0 })
+      .withMessage('hrAvg must be a positive number.'),
+    body('readings.*.rejectReason')
+      .optional()
+      .isString()
+      .isLength({ max: 200 })
+      .withMessage('rejectReason must be a short string.'),
   ],
   uploadReadings
 );
