@@ -152,6 +152,10 @@ async function uploadReadings(req, res) {
       spo2: r.spo2 !== undefined ? Number(r.spo2) : 0,
       clientId: session.clientId || 'CLIENT-001',
       ...normalizeBeatFields(r),
+      // Carried through from the frame: the device's declared rate (which is
+      // the chart's time base) and the gated PQRST for the frame's beat.
+      sampleRateHz: r.sampleRateHz ?? null,
+      ...(r.pqrst ? { pqrst: r.pqrst } : {}),
     }));
 
     await Reading.insertMany(docs, { ordered: false });

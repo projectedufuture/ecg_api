@@ -201,3 +201,113 @@ test('ECG:0 is a real sample and must not be rejected as falsy', () => {
   assert.notEqual(r, null);
   assert.equal(r.ecgValue, 0);
 });
+
+// ── Batched frame expansion ─────────────────────────────────────────
+// The current firmware sends N ECG samples per frame. These tests exist
+// because a parser that splits the frame on commas first keeps only the
+// FIRST sample and drops the rest silently - no error, most of the ECG gone.
+
+const { expandDeviceFrame } = require('../src/utils/rPeakIngest');
+
+const BATCHED =
+  'N:5,RATE_HZ:128,SEQ_START:10240,ECG_FILTERED:1342,1351,1349,1338,1330,' +
+  'HR:72,TEMP:36.75,LEAD:1,BEAT:1,SPO2:98,RR:832,QUALITY:1,' +
+  'PQRST_VALID:1,P:120,Q:-40,R:980,S:-150,T:210,PR:156,QRS:94,QT:356,QTC:390';
+
+test('EVERY sample of a batched frame is preserved', () => {
+  const rows = expandDeviceFrame(BATCHED, '2026-09-02T10:00:00.000Z');
+  assert.equal(rows.length, 5, 'one row per ECG sample');
+  assert.deepEqual(
+    rows.map((r) => r.ecgFiltered),
+    [1342, 1351, 1349, 1338, 1330],
+    'all five samples, in order'
+  );
+});
+
+test('each sample gets its own SEQ, counted from SEQ_START', () => {
+  // Per-sample SEQ is what makes a transmission gap detectable per sample
+  // rather than only per frame.
+  const rows = expandDeviceFrame(BATCHED, '2026-09-02T10:00:00.000Z');
+  assert.deepEqual(rows.map((r) => r.seq), [10240, 10241, 10242, 10243, 10244]);
+});
+
+test('per-sample timestamps come from the declared rate', () => {
+  const rows = expandDeviceFrame(BATCHED, '2026-09-02T10:00:00.000Z');
+  const ms = rows.map((r) => Date.parse(r.timestamp) - Date.parse('2026-09-02T10:00:00.000Z'));
+  // 128 Hz is 7.8125 ms per sample, rounded to whole ms.
+  assert.deepEqual(ms, [0, 8, 16, 23, 31]);
+  assert.equal(rows[0].sampleRateHz, 128, 'the rate travels with every row');
+});
+
+test('with no declared rate, samples share the frame time rather than a guessed spread', () => {
+  const rows = expandDeviceFrame('SEQ_START:9,ECG_RAW:5,6,7', '2026-09-02T10:00:00.000Z');
+  const stamps = new Set(rows.map((r) => r.timestamp));
+  assert.equal(stamps.size, 1, 'no interval is invented from an unknown rate');
+});
+
+test("the frame's single set of vitals is not multiplied across its samples", () => {
+  // HR:72 describes the whole batch. Writing it to all five rows would turn
+  // one measurement into five and bias every average that reads the column.
+  const rows = expandDeviceFrame(BATCHED, '2026-09-02T10:00:00.000Z');
+  assert.equal(rows.filter((r) => r.hr > 0).length, 1);
+  assert.equal(rows.filter((r) => r.beat === true).length, 1);
+  assert.equal(rows.filter((r) => r.spo2 > 0).length, 1);
+});
+
+test('PQRST is attached only when the device says it is valid', () => {
+  const valid = expandDeviceFrame(BATCHED, '2026-09-02T10:00:00.000Z');
+  assert.equal(valid[0].pqrst.qrsMs, 94);
+  assert.equal(valid[0].pqrst.prMs, 156);
+
+  // The firmware leaves the PREVIOUS beat's values in the frame when the flag
+  // is 0, so an ungated copy would attribute a stale complex to this beat.
+  const stale = expandDeviceFrame(
+    'N:2,RATE_HZ:128,SEQ_START:1,ECG_RAW:10,11,PQRST_VALID:0,PR:156,QRS:94,QT:356',
+    '2026-09-02T10:00:00.000Z'
+  );
+  assert.equal(stale[0].pqrst, null);
+  assert.equal(stale[0].pqrstValid, false);
+});
+
+test('the sample block is found whichever separator the firmware uses', () => {
+  for (const sep of [',', ' ', ';', '|']) {
+    const rows = expandDeviceFrame(
+      `N:3,RATE_HZ:128,SEQ_START:1,ECG_RAW:100${sep}101${sep}102,HR:70`,
+      '2026-09-02T10:00:00.000Z'
+    );
+    assert.equal(rows.length, 3, `separator "${sep}" yielded ${rows.length} rows`);
+    assert.deepEqual(rows.map((r) => r.ecgValue), [100, 101, 102]);
+  }
+});
+
+test('N is a checksum, not a truncation rule', () => {
+  // Discarding real decoded samples to satisfy a header would be worse than
+  // the mismatch, so every sample is kept and the disagreement reported.
+  const rows = expandDeviceFrame(
+    'N:9,RATE_HZ:128,SEQ_START:1,ECG_RAW:1,2,3',
+    '2026-09-02T10:00:00.000Z'
+  );
+  assert.equal(rows.length, 3);
+  assert.equal(rows.frameMeta.countMismatch, true);
+  assert.equal(rows.frameMeta.declaredCount, 9);
+});
+
+test('raw and filtered ECG are never conflated', () => {
+  const filtered = expandDeviceFrame('ECG_FILTERED:1342,1351,RATE_HZ:128', '2026-09-02T10:00:00.000Z');
+  assert.equal(filtered[0].ecgFiltered, 1342);
+  assert.equal(filtered[0].ecgRaw, null);
+
+  const raw = expandDeviceFrame('ECG_RAW:1342,1351,RATE_HZ:128', '2026-09-02T10:00:00.000Z');
+  assert.equal(raw[0].ecgRaw, 1342);
+  assert.equal(raw[0].ecgFiltered, null);
+});
+
+test('a legacy single-sample frame still yields exactly one row', () => {
+  const rows = expandDeviceFrame(
+    'ECG:1343,HR:0,TEMP:30.84,LEAD:1,BEAT:0,SPO2:0,RR:521,QUALITY:1',
+    '2026-09-02T10:00:00.000Z'
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].ecgValue, 1343);
+  assert.equal(rows[0].temperature, 30.84);
+});

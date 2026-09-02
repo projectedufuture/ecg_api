@@ -120,6 +120,9 @@ async function syncData(req, res) {
         spo2: r.spo2 !== undefined ? Number(r.spo2) : 0,
         clientId: user.clientId || 'CLIENT-001',
         ...normalizeBeatFields(r),
+        // Same two frame-level values the live path carries through.
+        sampleRateHz: r.sampleRateHz ?? null,
+        ...(r.pqrst ? { pqrst: r.pqrst } : {}),
       });
     }
 

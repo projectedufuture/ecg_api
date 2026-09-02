@@ -109,6 +109,75 @@ async function getSessionById(req, res) {
       .sort({ timestamp: 1 })
       .lean();
 
+    // ── ECG waveform block ────────────────────────────────────────────
+    //
+    // The admin chart renders the SAME real samples the phone does, through
+    // the same geometry, so it needs the same three things the phone gets:
+    // the samples, the device's declared rate (which IS the time base), and
+    // the contact/quality flags that decide whether the trace is trustworthy.
+    //
+    // Polarity is left exactly as the device sent it. The MAX30003 outputs
+    // inverted, and the phone negates at render time - so the renderer, not
+    // this projection, owns that transform. Negating here would double it.
+    // WHY A WINDOW AND NOT A DECIMATION.
+    //
+    // Thinning 42,000 samples down to 4,000 and still calling them 128 Hz
+    // makes the chart believe it is showing 31 s when the samples actually
+    // span 330 s - the time axis is then wrong by 10.6x, and every interval
+    // read off it is wrong by that factor. It also aliases the QRS, because
+    // each drawn complex is built from every tenth sample.
+    //
+    // So the samples are never thinned. The most recent window is returned at
+    // the FULL device rate, which keeps the axis true. The chart can only
+    // legibly draw about 25 s at 25 mm/s anyway (its own minimum px-per-mm
+    // rule), so a longer payload would be discarded at render time regardless.
+    const ECG_WINDOW_SEC = 60;
+    const ecgAll = readings.map((r) => r.ecgValue);
+
+    // The rate the device actually reported. Sessions recorded before the
+    // firmware sent RATE_HZ have none, and null must survive to the chart so
+    // it declines to claim a calibrated axis.
+    const reportedRate = readings.find((r) => r.sampleRateHz > 0);
+    // The most recent valid PQRST in the session; the amplitudes cannot place
+    // a landmark, so only the intervals are useful to the renderer.
+    const lastPqrst = [...readings].reverse().find((r) => r.pqrst && r.pqrst.qrsMs !== null);
+    // Contact and quality: degraded if ANY sample says so is too harsh, so
+    // these report the dominant state across the recording.
+    const leadOffCount = readings.filter((r) => r.leadOff === true).length;
+    const poorQualityCount = readings.filter((r) => r.ecgQuality === 0).length;
+
+    const rateHz = reportedRate ? reportedRate.sampleRateHz : null;
+    // With no reported rate there is no way to convert seconds to samples, so
+    // fall back to a fixed count. The chart will decline to claim a time base
+    // for those samples anyway.
+    const windowSamples = rateHz && rateHz > 0 ? Math.round(ECG_WINDOW_SEC * rateHz) : 4000;
+    const windowStart = Math.max(0, ecgAll.length - windowSamples);
+
+    const ecg = {
+      // Full-rate, newest-last. Never thinned, so sample i really is
+      // i / sampleRateHz seconds after the first one drawn.
+      samples: ecgAll.slice(windowStart),
+      totalSamples: ecgAll.length,
+      windowStartIndex: windowStart,
+      windowed: windowStart > 0,
+      sampleRateHz: rateHz,
+      leadOn: readings.length > 0 ? leadOffCount < readings.length / 2 : true,
+      quality:
+        readings.length === 0 || poorQualityCount === 0
+          ? 'unknown'
+          : poorQualityCount > readings.length / 2
+            ? 'poor'
+            : 'good',
+      pqrst: lastPqrst
+        ? {
+            prMs: lastPqrst.pqrst.prMs ?? null,
+            qrsMs: lastPqrst.pqrst.qrsMs ?? null,
+            qtMs: lastPqrst.pqrst.qtMs ?? null,
+            qtcMs: lastPqrst.pqrst.qtcMs ?? null,
+          }
+        : null,
+    };
+
     const ecgValues = readings.map((r) => r.ecgValue);
     const temperatureValues = readings.map((r) => r.temperatureCelsius);
     const timestamps = readings.map((r) => r.timestamp);
@@ -169,6 +238,7 @@ async function getSessionById(req, res) {
         maxSpo2: spo2Stats.max,
         location: session.location || null,
         ecgValues,
+        ecg,
         temperatureValues,
         hrValues,
         spo2Values,

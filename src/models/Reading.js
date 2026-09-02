@@ -105,6 +105,42 @@ const readingSchema = new mongoose.Schema(
      * informative thing available about why a beat was dropped.
      */
     rejectReason: { type: String, default: null },
+
+    /**
+     * The device's declared ECG sample rate (RATE_HZ) for the frame this
+     * sample came from.
+     *
+     * Stored per sample because it IS the chart's horizontal axis: a trace
+     * drawn at an assumed 50 Hz while the device runs at 128 Hz is stretched
+     * 2.56x, so every interval read off it is wrong by that factor. There is
+     * deliberately no default - null means "the device did not say", and a
+     * renderer must then decline to claim a time base rather than guess one.
+     */
+    sampleRateHz: { type: Number, default: null },
+
+    /**
+     * PQRST morphology exactly as the device reported it, on the sample that
+     * carried the frame's beat. Only present when the firmware set
+     * PQRST_VALID:1 - the device leaves the PREVIOUS beat's values in the
+     * frame otherwise, so an ungated copy would attribute a stale complex to
+     * this beat.
+     *
+     * P/Q/R/S/T are AMPLITUDES in an unconfirmed unit; the intervals are ms.
+     * The amplitudes cannot say WHERE a landmark sits on the trace, so a
+     * renderer must locate landmarks in the samples and use only the
+     * intervals to bound its search.
+     */
+    pqrst: {
+      p: { type: Number, default: null },
+      q: { type: Number, default: null },
+      r: { type: Number, default: null },
+      s: { type: Number, default: null },
+      t: { type: Number, default: null },
+      prMs: { type: Number, default: null },
+      qrsMs: { type: Number, default: null },
+      qtMs: { type: Number, default: null },
+      qtcMs: { type: Number, default: null },
+    },
   },
   { timestamps: true }
 );
