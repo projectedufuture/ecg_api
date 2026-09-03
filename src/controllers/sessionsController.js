@@ -1,5 +1,6 @@
 const Session = require('../models/Session');
 const Reading = require('../models/Reading');
+const { loadSessionBeats } = require('./app/ecgBeatsController');
 
 async function listSessions(req, res) {
   try {
@@ -104,10 +105,18 @@ async function getSessionById(req, res) {
       return res.status(404).json({ success: false, data: null, error: 'Session not found.' });
     }
 
-    // Get all readings for this session
+    // Get all readings for this session.
+    // Ordered by timestamp AND seq: a batched frame's samples can share one
+    // wall-clock timestamp, so timestamp alone leaves their intra-frame order
+    // undefined and the waveform can come back scrambled.
     const readings = await Reading.find({ sessionId: session.id })
-      .sort({ timestamp: 1 })
+      .sort({ timestamp: 1, seq: 1 })
       .lean();
+
+    // The APP's own beat-level analysis, through the SAME mapper the app
+    // endpoint uses - so admin and app can never be served different shapes of
+    // the same record. Distinct from ecg.pqrst below, which is the firmware's.
+    const ecgBeatAnalyses = await loadSessionBeats(session.id);
 
     // ── ECG waveform block ────────────────────────────────────────────
     //
@@ -239,6 +248,8 @@ async function getSessionById(req, res) {
         location: session.location || null,
         ecgValues,
         ecg,
+        // APP-generated, beat-level, one document per detected beat.
+        ecgBeatAnalyses,
         temperatureValues,
         hrValues,
         spo2Values,

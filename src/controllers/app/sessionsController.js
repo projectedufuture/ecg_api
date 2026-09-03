@@ -16,6 +16,8 @@ const TemperatureAnalysis = require('../../models/TemperatureAnalysis');
 const TemperatureEvent = require('../../models/TemperatureEvent');
 const CombinedAnalysis = require('../../models/CombinedAnalysis');
 const { queueSessionReports } = require('../../services/ecgRrService');
+const { loadSessionBeats } = require('./ecgBeatsController');
+const EcgBeatAnalysis = require('../../models/EcgBeatAnalysis');
 const { attachCachedAddress, queueResolve } = require('../../services/locationService');
 
 function makeSessionId() {
@@ -291,10 +293,19 @@ async function getSession(req, res) {
     const { includeReadings } = req.query;
     let readings = [];
     if (includeReadings === 'true') {
+      // Ordered by timestamp AND seq: a batched frame's samples can share one
+      // wall-clock timestamp, so timestamp alone leaves their intra-frame
+      // order undefined and the waveform can come back scrambled.
       readings = await Reading.find({ sessionId, userId: req.user.userId })
-        .sort({ timestamp: 1 })
+        .sort({ timestamp: 1, seq: 1 })
         .lean();
     }
+
+    // The app's own beat-level analysis, always included. It is small (one
+    // document per beat, not per sample) and it is what the client needs to
+    // show intervals alongside the trace, so it is not gated behind
+    // includeReadings - that flag is about the bulk sample payload.
+    const ecgBeatAnalyses = await loadSessionBeats(sessionId);
 
     return res.json({
       success: true,
@@ -317,9 +328,18 @@ async function getSession(req, res) {
           timestamp: r.timestamp,
           ecgValue: r.ecgValue,
           temperature: r.temperatureCelsius,
+          // MAX30102 heart rate, unchanged. No ECG-derived HR is added.
           hr: r.hr || 0,
           spo2: r.spo2 || 0,
+          // Sample identity and the rate that makes the time axis meaningful.
+          ecgFiltered: r.ecgFiltered ?? null,
+          ecgRaw: r.ecgRaw ?? null,
+          seq: r.seq ?? null,
+          sampleRateHz: r.sampleRateHz ?? null,
         })),
+        // APP-generated, beat-level. Distinct from Reading.pqrst, which is the
+        // firmware's own per-sample analysis and is not used here.
+        ecgBeatAnalyses,
       },
       error: null,
     });
@@ -352,6 +372,11 @@ async function deleteSession(req, res) {
       TemperatureAnalysis.deleteOne({ sessionId }),
       TemperatureEvent.deleteMany({ sessionId }),
       CombinedAnalysis.deleteOne({ sessionId }),
+      // The app's beat analyses belong to this recording too. NOTE: they are
+      // deleted only here, on an explicit session delete - never by
+      // invalidateSessionAnalysis, because they are uploaded source data and
+      // not something the backend can regenerate.
+      EcgBeatAnalysis.deleteMany({ sessionId }),
     ]);
 
     return res.json({ success: true, data: null, error: null });
