@@ -162,7 +162,13 @@ async function stopSession(req, res) {
             { $match: { spo2: { $gt: 0 } } },
             { $group: { _id: null, avg: { $avg: '$spo2' }, min: { $min: '$spo2' }, max: { $max: '$spo2' } } },
           ],
-          temp: [{ $group: { _id: null, avg: { $avg: '$temperatureCelsius' } } }],
+          // 0 = not-measured (sensor not yet reading / lost contact), same
+          // convention as hr/spo2 above — must be excluded or it drags the
+          // average down toward zero.
+          temp: [
+            { $match: { temperatureCelsius: { $gt: 0 } } },
+            { $group: { _id: null, avg: { $avg: '$temperatureCelsius' } } },
+          ],
           count: [{ $count: 'n' }],
         },
       },
