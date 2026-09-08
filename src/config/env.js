@@ -41,7 +41,7 @@ module.exports = {
     // cannot support the analysis: HRV conventions want minutes of data, the
     // respiratory band bottoms out at 0.1 Hz (a 10 s cycle), and a baseline
     // needs enough history to be a baseline at all.
-    minSessionDurationSec: parseInt(process.env.MIN_REPORT_SESSION_SEC, 10) || 300,
+    minSessionDurationSec: parseInt(process.env.MIN_REPORT_SESSION_SEC, 10) || 120,
   },
   geocoding: {
     // 'nominatim' (OpenStreetMap, no API key) | 'google' (needs a key) | 'none'.
