@@ -198,6 +198,13 @@ async function getSessionById(req, res) {
       temperatureCelsius: r.temperatureCelsius,
       hr: r.hr || 0,
       spo2: r.spo2 || 0,
+      // Device-reported RR interval (device RR field) and PR interval (from
+      // the device's own PQRST, present only on the sample it belongs to).
+      // Sparse by nature - most readings carry neither - so the client
+      // forward-fills them the same way it already does for hr/temp, holding
+      // the last real value until the next one arrives.
+      rrIntervalMs: r.rrIntervalMs ?? null,
+      prMs: r.pqrst?.prMs ?? null,
     }));
 
     // Compute avg/min/max from the actual readings (ignoring 0 = no-finger samples).
