@@ -5,7 +5,7 @@ const cookieParser = require('cookie-parser');
 const mongoSanitize = require('express-mongo-sanitize');
 const connectDB = require('./config/db');
 const config = require('./config/env');
-const { generalLimiter } = require('./middleware/rateLimiter');
+const { generalLimiter, ingestLimiter } = require('./middleware/rateLimiter');
 
 // Route imports
 const adminAuthRoutes = require('./routes/adminAuth');
@@ -106,10 +106,14 @@ app.use('/api/app/auth', appAuthRoutes);
 app.use('/api/app/users', appUsersRoutes);
 app.use('/api/app/devices', appDevicesRoutes);
 app.use('/api/app/sessions', appSessionsRoutes);
-app.use('/api/app/readings', appReadingsRoutes);
+// High-frequency ingest endpoints, hit continuously for the length of a live
+// recording - given their own, much more generous limiter (see rateLimiter.js)
+// instead of the general one, which is sized for occasional browsing traffic
+// and would 429 almost any live session on its own.
+app.use('/api/app/readings', ingestLimiter, appReadingsRoutes);
 app.use('/api/app/reports', appReportsRoutes);
-app.use('/api/app/ecg-beats', appEcgBeatsRoutes);
-app.use('/api/app/sync', appSyncRoutes);
+app.use('/api/app/ecg-beats', ingestLimiter, appEcgBeatsRoutes);
+app.use('/api/app/sync', ingestLimiter, appSyncRoutes);
 app.use('/api/app/licenses', appLicensesRoutes);
 
 app.get("/", (req, res) => {
