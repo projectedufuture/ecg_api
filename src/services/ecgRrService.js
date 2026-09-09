@@ -91,11 +91,28 @@ async function loadPpgSamples(sessionId) {
 }
 
 /**
- * Load the session's vitals rows — one entry per reading, in time order.
+ * Load the session's vitals rows — one entry per VITALS REPORT, in time order.
  *
  * SpO2 and temperature live on the reading rows themselves rather than on the
  * R-peak subset, so they need their own loader. Loaded ONCE and shared by the
  * SpO2, temperature and combined analyses, so all three describe the same rows.
+ *
+ * ONE ENTRY PER FRAME, NOT PER ECG SAMPLE.
+ * A batched device frame carries N ECG samples but a SINGLE set of vitals, and
+ * the ingest layer deliberately attaches them to the frame's FIRST sample only
+ * (see expandDeviceFrame: repeating one measurement across all N rows would
+ * multiply it into N and bias every average that reads those columns). The
+ * other N-1 rows are ECG-only. They are not failed vitals measurements — they
+ * were never a measurement opportunity at all — so counting them as such made
+ * coverage read 1/N of its true value: with the current 5-sample frames, SpO2
+ * and temperature could never exceed 20% coverage however perfectly the
+ * sensors performed, and both reports were then rejected outright by their own
+ * 40% coverage gate.
+ *
+ * A row counts as a vitals report when it carries ANY frame-level field. When
+ * no row in the session carries one (legacy readings, or a client posting
+ * explicit per-reading JSON without these markers) every row is kept, which is
+ * the behaviour that predates this filter.
  *
  * `t` is seconds from the first reading, matching the offset convention the
  * other modules use. Sentinel values are left as-is here and filtered by each
@@ -103,15 +120,29 @@ async function loadPpgSamples(sessionId) {
  */
 async function loadVitalsRows(sessionId) {
   const rows = await Reading.find({ sessionId })
-    .select('timestamp spo2 temperatureCelsius hr ecgQuality leadOff')
+    .select('timestamp spo2 temperatureCelsius hr ecgQuality leadOff rrIntervalMs beat')
     .sort({ timestamp: 1 })
     .limit(200000)
     .lean();
 
   if (!rows.length) return [];
 
+  const reported = (value) => value !== null && value !== undefined;
+  const isVitalsReport = (row) =>
+    reported(row.ecgQuality) ||
+    reported(row.rrIntervalMs) ||
+    row.beat === true ||
+    row.hr > 0 ||
+    row.spo2 > 0 ||
+    row.temperatureCelsius > 0;
+
+  const frames = rows.filter(isVitalsReport);
+  const source = frames.length ? frames : rows;
+
+  // Offsets stay relative to the recording's FIRST reading rather than the
+  // first frame row, so `t` means the same thing here as in every other module.
   const base = new Date(rows[0].timestamp).getTime();
-  return rows
+  return source
     .map((row) => {
       const ms = new Date(row.timestamp).getTime();
       if (!Number.isFinite(ms)) return null;
@@ -120,7 +151,15 @@ async function loadVitalsRows(sessionId) {
         timestamp: row.timestamp,
         // SPO2:0 is the "not measured" sentinel, so it becomes null here.
         spo2: Number.isFinite(row.spo2) && row.spo2 > 0 ? row.spo2 : null,
-        tempC: Number.isFinite(row.temperatureCelsius) ? row.temperatureCelsius : null,
+        // TEMP:0 is the same kind of sentinel and needs the same treatment.
+        // Left as 0 it reaches the combined analysis as a real 0 °C reading and
+        // corrupts every correlation computed against it. The temperature
+        // report itself was already shielded by its own 20-45 °C plausibility
+        // band; the combined one was not.
+        tempC:
+          Number.isFinite(row.temperatureCelsius) && row.temperatureCelsius > 0
+            ? row.temperatureCelsius
+            : null,
         ecgQuality: row.ecgQuality ?? null,
         leadOff: row.leadOff === true,
       };
