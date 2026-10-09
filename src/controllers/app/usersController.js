@@ -21,7 +21,16 @@ async function updateMe(req, res) {
     return res.status(400).json({ success: false, data: null, error: errors.array()[0].msg });
   }
 
-  const { name, email } = req.body;
+  const {
+    name,
+    email,
+    age,
+    sex,
+    heightCm,
+    weightKg,
+    fitnessGoal,
+    activeMinutesGoal,
+  } = req.body;
 
   try {
     const user = await User.findOne({ id: req.user.userId });
@@ -40,6 +49,16 @@ async function updateMe(req, res) {
     }
 
     if (name) user.name = name;
+
+    // Body profile & goals — only touched when the client sends the key, so a
+    // partial update never clears unrelated fields. `null` explicitly clears.
+    if (age !== undefined) user.age = age;
+    if (sex !== undefined) user.sex = sex;
+    if (heightCm !== undefined) user.heightCm = heightCm;
+    if (weightKg !== undefined) user.weightKg = weightKg;
+    if (fitnessGoal !== undefined) user.fitnessGoal = fitnessGoal;
+    if (activeMinutesGoal !== undefined) user.activeMinutesGoal = activeMinutesGoal;
+
     user.lastActive = new Date().toISOString();
     await user.save();
 

@@ -17,6 +17,13 @@ const userSchema = new mongoose.Schema(
     resetPasswordToken: { type: String, default: null, select: false },
     resetPasswordExpiry: { type: Date, default: null, select: false },
     mustChangePassword: { type: Boolean, default: false },
+    // ── Body profile & goals (user-entered; not sensor data) ───────────────
+    age: { type: Number, default: null },
+    sex: { type: String, enum: ['male', 'female', 'other', null], default: null },
+    heightCm: { type: Number, default: null },
+    weightKg: { type: Number, default: null },
+    fitnessGoal: { type: String, default: null },
+    activeMinutesGoal: { type: Number, default: null },
     lastLocation: {
       lat: { type: Number, default: null },
       lng: { type: Number, default: null },
@@ -67,6 +74,14 @@ userSchema.methods.toAppJSON = function () {
     status: this.status,
     mustChangePassword: this.mustChangePassword,
     lastLocation: this.lastLocation || null,
+    // Body profile & goals (null until the user sets them).
+    age: this.age ?? null,
+    sex: this.sex ?? null,
+    heightCm: this.heightCm ?? null,
+    weightKg: this.weightKg ?? null,
+    fitnessGoal: this.fitnessGoal ?? null,
+    activeMinutesGoal: this.activeMinutesGoal ?? null,
+    createdAt: this.createdAt || null,
   };
 };
 
