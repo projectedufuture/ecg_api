@@ -88,3 +88,15 @@ test('computeAnalytics handles no activities without crashing', () => {
   assert.equal(r.stats.activityCount, 0);
   assert.equal(r.acwrLabel, 'insufficient');
 });
+
+test('computeAnalytics returns VO2max only when age + resting HR are known', () => {
+  // age 30 → HRmax 187 (208 − 0.7·30); VO2max = 15.3 × 187 / 60 ≈ 47.69.
+  const withBoth = computeAnalytics([], { age: 30, restingHeartRate: 60, period: 'week' });
+  assert.ok(withBoth.vo2max > 47 && withBoth.vo2max < 48, `got ${withBoth.vo2max}`);
+
+  const noRest = computeAnalytics([], { age: 30, period: 'week' });
+  assert.equal(noRest.vo2max, null);
+
+  const noAge = computeAnalytics([], { restingHeartRate: 60, period: 'week' });
+  assert.equal(noAge.vo2max, null);
+});

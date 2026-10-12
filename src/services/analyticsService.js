@@ -62,6 +62,13 @@ function mean(xs) {
   return xs.reduce((a, b) => a + b, 0) / xs.length;
 }
 
+/** Uth–Sørensen VO₂max estimate = 15.3 × HRmax / HRrest. Null without both. */
+function vo2maxEstimate({ hrMax, hrRest }) {
+  if (!Number.isFinite(hrMax) || !Number.isFinite(hrRest) || hrRest <= 0) return null;
+  const v = (15.3 * hrMax) / hrRest;
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
 /** Local calendar day string YYYY-MM-DD for a Date. */
 function ymd(d) {
   const y = d.getFullYear();
@@ -158,6 +165,9 @@ function computeAnalytics(activities, { age, restingHeartRate, period = 'week', 
   // Period stats.
   const stats = statsForPeriod(acts, period, ref);
 
+  // VO₂max (Uth–Sørensen) — only when HRmax (age) + resting HR are available.
+  const vo2max = vo2maxEstimate({ hrMax, hrRest });
+
   return {
     period,
     hasRestingHr,
@@ -169,6 +179,7 @@ function computeAnalytics(activities, { age, restingHeartRate, period = 'week', 
     trimpToday: nOrNull(trimpToday),
     days,
     months,
+    vo2max: nOrNull(vo2max),
     stats,
   };
 }
@@ -259,5 +270,6 @@ module.exports = {
   acwrLabel,
   monotony,
   mean,
+  vo2maxEstimate,
   computeAnalytics,
 };
