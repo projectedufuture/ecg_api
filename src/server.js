@@ -23,7 +23,6 @@ const appReportsRoutes = require('./routes/app/reports');
 const appEcgBeatsRoutes = require('./routes/app/ecgBeats');
 const appDevicesRoutes = require('./routes/app/devices');
 const appSessionsRoutes = require('./routes/app/sessions');
-const appActivitiesRoutes = require('./routes/app/activities');
 const appAnalyticsRoutes = require('./routes/app/analytics');
 const appReadingsRoutes = require('./routes/app/readings');
 const appSyncRoutes = require('./routes/app/sync');
@@ -108,10 +107,9 @@ app.use('/api/app/auth', appAuthRoutes);
 app.use('/api/app/users', appUsersRoutes);
 app.use('/api/app/devices', appDevicesRoutes);
 app.use('/api/app/sessions', appSessionsRoutes);
-// Activities (GPS fitness activities) — low-frequency CRUD; relies on the
-// general limiter like sessions (NOT the ingest limiter).
-app.use('/api/app/activities', appActivitiesRoutes);
-// Analytics — read-only aggregation of existing activities (general limiter).
+// Analytics — read-only aggregation of existing activity sessions (general limiter).
+// GPS activities are now part of the unified Session record (activityType),
+// so the standalone /api/app/activities resource has been removed.
 app.use('/api/app/analytics', appAnalyticsRoutes);
 // High-frequency ingest endpoints, hit continuously for the length of a live
 // recording - given their own, much more generous limiter (see rateLimiter.js)

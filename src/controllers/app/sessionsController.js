@@ -19,9 +19,49 @@ const { queueSessionReports } = require('../../services/ecgRrService');
 const { loadSessionBeats } = require('./ecgBeatsController');
 const EcgBeatAnalysis = require('../../models/EcgBeatAnalysis');
 const { attachCachedAddress, queueResolve } = require('../../services/locationService');
+const {
+  nonNeg,
+  deriveAverageSpeedMps,
+  derivePaceSecPerKm,
+  sanitizeRoutePoints,
+  optPosInt,
+} = require('../../services/activityService');
 
 function makeSessionId() {
   return `sess_${crypto.randomBytes(8).toString('hex')}`;
+}
+
+// Valid activity types for a Session. 'ecg' marks a plain ECG recording (the
+// default); the rest are GPS workouts. The route validator enforces this too,
+// but the controller guards so an unexpected value degrades to 'ecg' rather
+// than being stored verbatim.
+const SESSION_ACTIVITY_TYPES = [
+  'ecg',
+  'walking',
+  'running',
+  'cycling',
+  'hiking',
+  'training',
+  'recovery_walk',
+  'interval_run',
+  'other',
+];
+
+function normalizeSessionActivityType(type) {
+  return SESSION_ACTIVITY_TYPES.includes(type) ? type : 'ecg';
+}
+
+// Normalise an optional {lat,lng,accuracy,address} location body, or null.
+function normalizeLocationInput(loc) {
+  if (!loc || !Number.isFinite(Number(loc.lat)) || !Number.isFinite(Number(loc.lng))) {
+    return null;
+  }
+  return {
+    lat: Number(loc.lat),
+    lng: Number(loc.lng),
+    accuracy: loc.accuracy != null ? Number(loc.accuracy) : null,
+    address: loc.address || null,
+  };
 }
 
 async function createSession(req, res) {
@@ -30,7 +70,7 @@ async function createSession(req, res) {
     return res.status(400).json({ success: false, data: null, error: errors.array()[0].msg });
   }
 
-  const { deviceId, startTime, name, location } = req.body;
+  const { deviceId, startTime, name, location, activityType } = req.body;
 
   try {
     const device = await Device.findOne({ id: deviceId, userId: req.user.userId });
@@ -89,6 +129,10 @@ async function createSession(req, res) {
       maxHR: 0,
       clientId: user.clientId || 'CLIENT-001',
       location: sessionLocation,
+      // Activity type is set at start when the recording is a GPS workout;
+      // defaults to 'ecg' for a plain recording. Workout metrics (route,
+      // distance, pace, calories, HRV) are filled in at finalize (stopSession).
+      activityType: normalizeSessionActivityType(activityType),
     });
 
     if (sessionLocation && !sessionLocation.address) {
@@ -118,8 +162,28 @@ async function stopSession(req, res) {
   }
 
   const { sessionId } = req.params;
-  const { endTime, duration, bpmAvg, bpmPeak, bpmMin, avgTemp, spo2Avg, spo2Peak, spo2Min } =
-    req.body;
+  const {
+    endTime,
+    duration,
+    bpmAvg,
+    bpmPeak,
+    bpmMin,
+    avgTemp,
+    spo2Avg,
+    spo2Peak,
+    spo2Min,
+    // ── Optional activity / GPS workout payload ──────────────────────────
+    activityType,
+    endLocation,
+    routePoints,
+    distanceMeters,
+    activeDurationSeconds,
+    pausedDurationSeconds,
+    maxSpeedMps,
+    calories,
+    rmssd,
+    sdnn,
+  } = req.body;
 
   try {
     const session = await Session.findOne({ id: sessionId, userId: req.user.userId });
@@ -209,6 +273,51 @@ async function stopSession(req, res) {
 
     session.dataPoints = agg?.count?.[0]?.n || 0;
 
+    // ── Activity / GPS workout finalize (additive) ───────────────────────
+    // Only touched when the client actually sends workout data, so a plain
+    // ECG finalize is completely unaffected. Speed/pace are recomputed here
+    // (never trusted from the client) using the same pure helpers the old
+    // activities endpoint used. HR min/avg/max, SpO2 and temperature are left
+    // to the readings-derived summary above — never duplicated here (§15).
+    if (activityType !== undefined) {
+      session.activityType = normalizeSessionActivityType(activityType);
+    }
+    if (routePoints !== undefined) {
+      session.routePoints = sanitizeRoutePoints(routePoints);
+    }
+    if (distanceMeters !== undefined) {
+      session.distanceMeters = nonNeg(distanceMeters);
+    }
+    if (activeDurationSeconds !== undefined) {
+      session.activeDurationSeconds = Math.round(nonNeg(activeDurationSeconds));
+    }
+    if (pausedDurationSeconds !== undefined) {
+      session.pausedDurationSeconds = Math.round(nonNeg(pausedDurationSeconds));
+    }
+    if (maxSpeedMps !== undefined) {
+      session.maxSpeedMps = nonNeg(maxSpeedMps);
+    }
+    if (calories !== undefined) {
+      session.calories = Math.round(nonNeg(calories));
+    }
+    if (rmssd !== undefined) session.rmssd = optPosInt(rmssd);
+    if (sdnn !== undefined) session.sdnn = optPosInt(sdnn);
+    const endLoc = normalizeLocationInput(endLocation);
+    if (endLoc) session.endLocation = endLoc;
+
+    // Derive average speed + pace from the (sanitised) distance and active time
+    // whenever either was supplied — mirrors the retired activitiesController.
+    if (distanceMeters !== undefined || activeDurationSeconds !== undefined) {
+      session.averageSpeedMps = deriveAverageSpeedMps(
+        session.distanceMeters,
+        session.activeDurationSeconds
+      );
+      session.averagePaceSecPerKm = derivePaceSecPerKm(
+        session.distanceMeters,
+        session.activeDurationSeconds
+      );
+    }
+
     // The recording is finished, so report generation is due. Mark it queued
     // BEFORE saving, so a client that reads the session immediately after the
     // stop response sees "pending" rather than the stale "not_started".
@@ -273,6 +382,13 @@ async function listSessions(req, res) {
         minSpo2: s.minSpo2 || 0,
         maxSpo2: s.maxSpo2 || 0,
         avgTemp: s.avgTemp,
+        // Activity summary for the list card (no heavy route array here).
+        activityType: s.activityType || 'ecg',
+        distanceMeters: s.distanceMeters || 0,
+        activeDurationSeconds: s.activeDurationSeconds || 0,
+        calories: s.calories || 0,
+        averagePaceSecPerKm: s.averagePaceSecPerKm ?? null,
+        averageSpeedMps: s.averageSpeedMps || 0,
       })),
       pagination: {
         page: pageNum,
@@ -330,6 +446,27 @@ async function getSession(req, res) {
         minSpo2: session.minSpo2 || 0,
         maxSpo2: session.maxSpo2 || 0,
         avgTemp: session.avgTemp,
+        // ── Activity / GPS workout data (null/empty for plain ECG) ───────
+        activityType: session.activityType || 'ecg',
+        location: session.location || null,
+        endLocation: session.endLocation || null,
+        distanceMeters: session.distanceMeters || 0,
+        activeDurationSeconds: session.activeDurationSeconds || 0,
+        pausedDurationSeconds: session.pausedDurationSeconds || 0,
+        averageSpeedMps: session.averageSpeedMps || 0,
+        maxSpeedMps: session.maxSpeedMps || 0,
+        averagePaceSecPerKm: session.averagePaceSecPerKm ?? null,
+        calories: session.calories || 0,
+        rmssd: session.rmssd ?? null,
+        sdnn: session.sdnn ?? null,
+        routePoints: (session.routePoints || []).map((p) => ({
+          latitude: p.latitude,
+          longitude: p.longitude,
+          timestamp: p.timestamp || null,
+          accuracy: p.accuracy ?? null,
+          altitude: p.altitude ?? null,
+          speed: p.speed ?? null,
+        })),
         readings: readings.map((r) => ({
           timestamp: r.timestamp,
           ecgValue: r.ecgValue,

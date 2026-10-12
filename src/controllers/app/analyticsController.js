@@ -1,12 +1,14 @@
 const { validationResult } = require('express-validator');
-const Activity = require('../../models/Activity');
+const Session = require('../../models/Session');
 const User = require('../../models/User');
 const { computeAnalytics, ANALYTICS_PERIODS } = require('../../services/analyticsService');
 
 /**
  * GET /api/app/analytics?period=day|week|month|year
  *
- * READ-ONLY aggregation over the user's existing Activity records + profile.
+ * READ-ONLY aggregation over the user's existing Session records + profile.
+ * Only GPS workout sessions (activityType !== 'ecg') count toward training
+ * load / distance / calories — mirroring the previous Activity-only semantics.
  * It creates no data and touches no other resource. Returns the same shape the
  * Flutter app computes locally offline.
  */
@@ -25,15 +27,27 @@ async function getAnalytics(req, res) {
     }
 
     // Pull a 13-month window so the 12-month series + 28-day load are covered.
-    // Only the fields the maths needs — no heavy route/HR-sample arrays.
+    // Only the fields the maths needs — no heavy route/HR-sample arrays. Source
+    // is now the unified Session record; map its field names to the shape
+    // computeAnalytics expects (startTime→startedAt, avgHR→averageHeartRate).
     const cutoff = new Date(Date.now() - 400 * 86400000).toISOString();
-    const activities = await Activity.find({
+    const sessions = await Session.find({
       userId: req.user.userId,
-      startedAt: { $gte: cutoff },
+      startTime: { $gte: cutoff },
+      activityType: { $ne: 'ecg' },
     })
-      .select('activityType startedAt activeDurationSeconds distanceMeters calories averageHeartRate')
-      .sort({ startedAt: 1 })
+      .select('activityType startTime activeDurationSeconds distanceMeters calories avgHR')
+      .sort({ startTime: 1 })
       .lean();
+
+    const activities = sessions.map((s) => ({
+      activityType: s.activityType,
+      startedAt: s.startTime,
+      activeDurationSeconds: s.activeDurationSeconds || 0,
+      distanceMeters: s.distanceMeters || 0,
+      calories: s.calories || 0,
+      averageHeartRate: s.avgHR || null,
+    }));
 
     const data = computeAnalytics(activities, {
       age: user.age,

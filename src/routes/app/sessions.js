@@ -1,6 +1,20 @@
 const express = require('express');
 const { body, param } = require('express-validator');
 const appAuth = require('../../middleware/appAuth');
+
+// Activity types a Session may carry. 'ecg' marks a plain recording (default);
+// the rest are GPS workouts. Mirrors the Session model enum.
+const SESSION_ACTIVITY_TYPES = [
+  'ecg',
+  'walking',
+  'running',
+  'cycling',
+  'hiking',
+  'training',
+  'recovery_walk',
+  'interval_run',
+  'other',
+];
 const {
   createSession,
   stopSession,
@@ -22,6 +36,7 @@ router.post(
     body('location.lng').optional().isFloat({ min: -180, max: 180 }),
     body('location.accuracy').optional().isFloat({ min: 0 }),
     body('location.address').optional().isString().trim().isLength({ max: 500 }),
+    body('activityType').optional().isIn(SESSION_ACTIVITY_TYPES),
   ],
   createSession
 );
@@ -40,6 +55,22 @@ router.put(
     body('spo2Peak').optional().isFloat({ min: 0, max: 100 }),
     body('spo2Min').optional().isFloat({ min: 0, max: 100 }),
     body('avgTemp').optional().isFloat(),
+    // ── Optional activity / GPS workout payload ──────────────────────────
+    body('activityType').optional().isIn(SESSION_ACTIVITY_TYPES),
+    body('distanceMeters').optional().isFloat({ min: 0 }),
+    body('maxSpeedMps').optional().isFloat({ min: 0 }),
+    body('activeDurationSeconds').optional().isInt({ min: 0 }),
+    body('pausedDurationSeconds').optional().isInt({ min: 0 }),
+    body('calories').optional().isFloat({ min: 0 }),
+    body('rmssd').optional().isFloat({ min: 0 }),
+    body('sdnn').optional().isFloat({ min: 0 }),
+    body('endLocation.lat').optional().isFloat({ min: -90, max: 90 }),
+    body('endLocation.lng').optional().isFloat({ min: -180, max: 180 }),
+    body('endLocation.accuracy').optional().isFloat({ min: 0 }),
+    body('endLocation.address').optional().isString().trim().isLength({ max: 500 }),
+    body('routePoints').optional().isArray(),
+    body('routePoints.*.latitude').optional().isFloat({ min: -90, max: 90 }),
+    body('routePoints.*.longitude').optional().isFloat({ min: -180, max: 180 }),
   ],
   stopSession
 );
