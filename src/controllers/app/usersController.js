@@ -30,6 +30,7 @@ async function updateMe(req, res) {
     weightKg,
     fitnessGoal,
     activeMinutesGoal,
+    restingHeartRate,
   } = req.body;
 
   try {
@@ -58,6 +59,7 @@ async function updateMe(req, res) {
     if (weightKg !== undefined) user.weightKg = weightKg;
     if (fitnessGoal !== undefined) user.fitnessGoal = fitnessGoal;
     if (activeMinutesGoal !== undefined) user.activeMinutesGoal = activeMinutesGoal;
+    if (restingHeartRate !== undefined) user.restingHeartRate = restingHeartRate;
 
     user.lastActive = new Date().toISOString();
     await user.save();

@@ -19,6 +19,7 @@ router.put(
     body('weightKg').optional({ nullable: true }).isFloat({ min: 2, max: 500 }).withMessage('Weight must be 2-500 kg.'),
     body('fitnessGoal').optional({ nullable: true }).isString().trim().isLength({ max: 120 }),
     body('activeMinutesGoal').optional({ nullable: true }).isInt({ min: 0, max: 1440 }).withMessage('Goal must be 0-1440 min.'),
+    body('restingHeartRate').optional({ nullable: true }).isInt({ min: 25, max: 120 }).withMessage('Resting HR must be 25-120 bpm.'),
   ],
   updateMe
 );

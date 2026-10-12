@@ -24,6 +24,9 @@ const userSchema = new mongoose.Schema(
     weightKg: { type: Number, default: null },
     fitnessGoal: { type: String, default: null },
     activeMinutesGoal: { type: Number, default: null },
+    // Resting heart rate (bpm), user-entered. Optional/nullable — enables the
+    // Analytics training-load (TRIMP) maths, which cannot be computed without it.
+    restingHeartRate: { type: Number, default: null },
     lastLocation: {
       lat: { type: Number, default: null },
       lng: { type: Number, default: null },
@@ -81,6 +84,7 @@ userSchema.methods.toAppJSON = function () {
     weightKg: this.weightKg ?? null,
     fitnessGoal: this.fitnessGoal ?? null,
     activeMinutesGoal: this.activeMinutesGoal ?? null,
+    restingHeartRate: this.restingHeartRate ?? null,
     createdAt: this.createdAt || null,
   };
 };
