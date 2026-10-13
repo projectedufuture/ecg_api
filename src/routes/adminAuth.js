@@ -3,6 +3,7 @@ const { body } = require('express-validator');
 const { login, refreshToken, logout, forgotPassword, resetPassword, changePassword, updateProfile } = require('../controllers/adminAuthController');
 const { loginLimiter, forgotPasswordLimiter } = require('../middleware/rateLimiter');
 const auth = require('../middleware/auth');
+const { EMAIL_NORMALIZE_OPTS } = require('../utils/emailNormalization');
 
 const router = express.Router();
 
@@ -10,7 +11,7 @@ router.post(
   '/login',
   loginLimiter,
   [
-    body('email').isEmail().withMessage('Valid email is required.').normalizeEmail(),
+    body('email').isEmail().withMessage('Valid email is required.').normalizeEmail(EMAIL_NORMALIZE_OPTS),
     body('password')
       .isString().withMessage('Password is required.')
       .isLength({ min: 8 }).withMessage('Password must be at least 8 characters.'),
@@ -25,7 +26,7 @@ router.post('/logout', logout);
 router.post(
   '/forgot-password',
   forgotPasswordLimiter,
-  [body('email').isEmail().withMessage('Valid email is required.').normalizeEmail()],
+  [body('email').isEmail().withMessage('Valid email is required.').normalizeEmail(EMAIL_NORMALIZE_OPTS)],
   forgotPassword
 );
 
@@ -45,7 +46,7 @@ router.put(
   auth,
   [
     body('name').optional().trim().notEmpty().withMessage('Name cannot be empty.'),
-    body('email').optional().isEmail().withMessage('Valid email is required.').normalizeEmail(),
+    body('email').optional().isEmail().withMessage('Valid email is required.').normalizeEmail(EMAIL_NORMALIZE_OPTS),
   ],
   updateProfile
 );

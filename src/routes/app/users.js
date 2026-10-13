@@ -2,6 +2,7 @@ const express = require('express');
 const { body } = require('express-validator');
 const appAuth = require('../../middleware/appAuth');
 const { getMe, updateMe, updateLocation } = require('../../controllers/app/usersController');
+const { EMAIL_NORMALIZE_OPTS } = require('../../utils/emailNormalization');
 
 const router = express.Router();
 
@@ -12,7 +13,7 @@ router.put(
   appAuth,
   [
     body('name').optional().trim().notEmpty().withMessage('Name cannot be empty.'),
-    body('email').optional().isEmail().withMessage('Valid email is required.').normalizeEmail(),
+    body('email').optional().isEmail().withMessage('Valid email is required.').normalizeEmail(EMAIL_NORMALIZE_OPTS),
     body('age').optional({ nullable: true }).isInt({ min: 0, max: 120 }).withMessage('Age must be 0-120.'),
     body('sex').optional({ nullable: true }).isIn(['male', 'female', 'other']).withMessage('Invalid sex.'),
     body('heightCm').optional({ nullable: true }).isInt({ min: 30, max: 272 }).withMessage('Height must be 30-272 cm.'),

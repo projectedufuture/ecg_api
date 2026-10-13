@@ -4,6 +4,7 @@ const auth = require('../middleware/auth');
 const { applyClientScope } = require('../middleware/rbac');
 const { auditLogger } = require('../middleware/auditLogger');
 const validate = require('../middleware/validate');
+const { EMAIL_NORMALIZE_OPTS } = require('../utils/emailNormalization');
 const {
   listUsers,
   getUserById,
@@ -30,7 +31,7 @@ router.post(
   '/',
   [
     body('name').trim().notEmpty().withMessage('Name is required.'),
-    body('email').isEmail().withMessage('Valid email is required.').normalizeEmail(),
+    body('email').isEmail().withMessage('Valid email is required.').normalizeEmail(EMAIL_NORMALIZE_OPTS),
     body('deviceId')
       .optional({ nullable: true, checkFalsy: true })
       .matches(/^ECG-\d{4,5}$/)

@@ -10,6 +10,7 @@ const {
 } = require('../../controllers/app/authController');
 const appAuth = require('../../middleware/appAuth');
 const { loginLimiter, forgotPasswordLimiter } = require('../../middleware/rateLimiter');
+const { EMAIL_NORMALIZE_OPTS } = require('../../utils/emailNormalization');
 
 const router = express.Router();
 
@@ -22,7 +23,7 @@ router.post(
   '/login',
   loginLimiter,
   [
-    body('email').isEmail().withMessage('Valid email is required.').normalizeEmail(),
+    body('email').isEmail().withMessage('Valid email is required.').normalizeEmail(EMAIL_NORMALIZE_OPTS),
     body('password').isString().notEmpty().withMessage('Password is required.'),
   ],
   login
@@ -35,7 +36,7 @@ router.post('/logout', appAuth, logout);
 router.post(
   '/forgot-password',
   forgotPasswordLimiter,
-  [body('email').isEmail().withMessage('Valid email is required.').normalizeEmail()],
+  [body('email').isEmail().withMessage('Valid email is required.').normalizeEmail(EMAIL_NORMALIZE_OPTS)],
   forgotPassword
 );
 
