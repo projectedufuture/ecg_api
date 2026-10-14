@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const { validationResult } = require('express-validator');
-const { decimateEvenly } = require('../../utils/decimate');
+const { decimateEvenly, previewStride } = require('../../utils/decimate');
 const Session = require('../../models/Session');
 const Device = require('../../models/Device');
 const Reading = require('../../models/Reading');
@@ -457,15 +457,69 @@ async function getSession(req, res) {
       if (!Number.isFinite(points)) points = 2000;
       points = Math.min(4000, Math.max(200, points));
 
-      const all = await Reading.find({ sessionId, userId: req.user.userId })
-        .select(READING_PROJECTION)
-        .sort({ timestamp: 1, seq: 1 })
-        .lean();
+      const filter = { sessionId, userId: req.user.userId };
+      // Cheap, index-backed count ({sessionId,…} prefix) — not a full read.
+      const total = await Reading.countDocuments(filter);
 
-      const total = all.length;
-      readings = decimateEvenly(all, points);
+      if (total === 0) {
+        readings = [];
+      } else if (total <= points) {
+        // Already within budget: return everything (still projected, so small).
+        readings = await Reading.find(filter)
+          .select(READING_PROJECTION)
+          .sort({ timestamp: 1, seq: 1 })
+          .lean();
+      } else {
+        // ── BOUNDED DB FETCH (the fix) ──────────────────────────────────────
+        // `seq` is the device's per-sample sequence number (+1 each sample),
+        // so `seq % stride === 0` selects ~evenly-spaced samples across the
+        // whole recording. Evaluated against the {sessionId, seq} INDEX (via
+        // the hint), the $mod is an index-key filter: Mongo scans the small
+        // index entries and materialises ONLY the ~points matching documents —
+        // it never loads all ~total readings into Node. Ordered by seq, which
+        // is chronological (and the correct intra-frame tiebreak for samples
+        // that share a timestamp).
+        const stride = previewStride(total, points);
+        let sampled = [];
+        try {
+          sampled = await Reading.find({
+            ...filter,
+            seq: { $ne: null, $mod: [stride, 0] },
+          })
+            .select(READING_PROJECTION)
+            .sort({ seq: 1 })
+            .hint({ sessionId: 1, seq: 1 })
+            .lean();
+        } catch (e) {
+          // The hint only fails if the {sessionId,seq} index is not built
+          // (e.g. autoIndex disabled and the migration not run yet). Treat it
+          // like the sparse-seq case below and fall back — correctness over
+          // speed, never a 500. Create the index to get the fast path.
+          console.warn(
+            `[getSession] bounded preview hint failed (${e.message}); ` +
+              'falling back to full read + decimate. Create index {sessionId:1, seq:1}.'
+          );
+          sampled = [];
+        }
+
+        if (sampled.length < Math.min(points * 0.5, 100)) {
+          // seq is missing/too sparse (legacy one-sample frames). Fall back to
+          // the previous read-all-then-decimate path so nothing regresses —
+          // slower, but correct and rare.
+          const all = await Reading.find(filter)
+            .select(READING_PROJECTION)
+            .sort({ timestamp: 1, seq: 1 })
+            .lean();
+          sampled = decimateEvenly(all, points);
+        } else if (sampled.length > points) {
+          // Sequence gaps/offset can overshoot slightly; clamp to the contract.
+          sampled = decimateEvenly(sampled, points);
+        }
+        readings = sampled;
+      }
+
       ecgPreviewMeta = {
-        downsampled: total > points,
+        downsampled: total > readings.length,
         sourceSampleCount: total,
         previewPoints: readings.length,
       };

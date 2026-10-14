@@ -30,4 +30,18 @@ function decimateEvenly(arr, points) {
   return out;
 }
 
-module.exports = { decimateEvenly };
+/**
+ * The stride used to pick ~`points` evenly-spaced samples out of `total` by
+ * `seq % stride === 0`. At least 2 (so a session larger than `points` is always
+ * thinned), and ceil(total/points) so the result stays within the budget.
+ *
+ * @param {number} total  Total samples in the session.
+ * @param {number} points Target preview size.
+ * @returns {number} The modulo stride (>= 2).
+ */
+function previewStride(total, points) {
+  const p = Math.max(1, Math.floor(points) || 0);
+  return Math.max(2, Math.ceil(total / p));
+}
+
+module.exports = { decimateEvenly, previewStride };
