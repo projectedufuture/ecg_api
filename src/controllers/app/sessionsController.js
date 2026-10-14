@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { validationResult } = require('express-validator');
+const { decimateEvenly } = require('../../utils/decimate');
 const Session = require('../../models/Session');
 const Device = require('../../models/Device');
 const Reading = require('../../models/Reading');
@@ -412,15 +413,62 @@ async function getSession(req, res) {
       return res.status(404).json({ success: false, data: null, error: 'Session not found.' });
     }
 
-    const { includeReadings } = req.query;
+    // Only the fields the response below actually maps — a Reading has ~40
+    // fields (pqrst sub-doc, ppg, beat flags, …) and pulling them all for
+    // ~100k docs was a large, needless fetch + serialize cost. Projection is
+    // transparent: the returned shape is unchanged.
+    const READING_PROJECTION = {
+      _id: 0,
+      timestamp: 1,
+      ecgValue: 1,
+      temperatureCelsius: 1,
+      hr: 1,
+      spo2: 1,
+      ecgFiltered: 1,
+      ecgRaw: 1,
+      seq: 1,
+      sampleRateHz: 1,
+    };
+
+    const { includeReadings, ecgPreview, ecgPreviewPoints } = req.query;
     let readings = [];
+    let ecgPreviewMeta = null;
+
     if (includeReadings === 'true') {
-      // Ordered by timestamp AND seq: a batched frame's samples can share one
-      // wall-clock timestamp, so timestamp alone leaves their intra-frame
-      // order undefined and the waveform can come back scrambled.
+      // FULL-RESOLUTION path (export / analysis), unchanged in shape and
+      // backward-compatible. Ordered by timestamp AND seq: a batched frame's
+      // samples can share one wall-clock timestamp, so timestamp alone leaves
+      // their intra-frame order undefined and the waveform can come back
+      // scrambled.
       readings = await Reading.find({ sessionId, userId: req.user.userId })
+        .select(READING_PROJECTION)
         .sort({ timestamp: 1, seq: 1 })
         .lean();
+    } else if (ecgPreview != null && ecgPreview !== 'false') {
+      // BOUNDED PREVIEW path for the detail screen's initial waveform. Returns
+      // at most `points` EVENLY-SPACED samples (never more), so the client can
+      // draw a representative trace without downloading every sample. The
+      // database is NOT changed; full resolution stays available via
+      // includeReadings=true and GET /api/app/readings. Preview samples keep
+      // their real timestamp / seq / sampleRateHz / ecgValue, so the time axis
+      // stays correct — they are for VISUALIZATION only and must never be used
+      // for PQRST or clinical analysis (that uses ecgBeatAnalyses / full res).
+      let points = parseInt(ecgPreviewPoints ?? ecgPreview, 10);
+      if (!Number.isFinite(points)) points = 2000;
+      points = Math.min(4000, Math.max(200, points));
+
+      const all = await Reading.find({ sessionId, userId: req.user.userId })
+        .select(READING_PROJECTION)
+        .sort({ timestamp: 1, seq: 1 })
+        .lean();
+
+      const total = all.length;
+      readings = decimateEvenly(all, points);
+      ecgPreviewMeta = {
+        downsampled: total > points,
+        sourceSampleCount: total,
+        previewPoints: readings.length,
+      };
     }
 
     // The app's own beat-level analysis, always included. It is small (one
@@ -483,6 +531,10 @@ async function getSession(req, res) {
         // APP-generated, beat-level. Distinct from Reading.pqrst, which is the
         // firmware's own per-sample analysis and is not used here.
         ecgBeatAnalyses,
+        // Non-null only for the bounded ?ecgPreview path: tells the client the
+        // waveform above is a visualization preview and how many real samples
+        // it was decimated from. null for full / no-readings responses.
+        ecgPreview: ecgPreviewMeta,
       },
       error: null,
     });

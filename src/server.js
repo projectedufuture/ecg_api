@@ -1,6 +1,7 @@
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
+const compression = require('compression');
 const cookieParser = require('cookie-parser');
 const mongoSanitize = require('express-mongo-sanitize');
 const connectDB = require('./config/db');
@@ -82,6 +83,13 @@ app.use(
 );
 app.use(mongoSanitize());
 app.use(generalLimiter);
+
+// gzip responses. ECG/readings JSON is large and highly compressible
+// (repetitive numeric arrays), so this cuts the session-detail payload
+// several-fold over the wire. Safe/transparent: clients that send
+// Accept-Encoding: gzip get a compressed body, others get plain JSON.
+// No response fields change. threshold:1024 skips tiny bodies.
+app.use(compression({ threshold: 1024 }));
 
 // Body parsing
 app.use(express.json({ limit: '10mb' }));
