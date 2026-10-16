@@ -16,6 +16,9 @@ const devicesRoutes = require('./routes/devices');
 const licensesRoutes = require('./routes/licenses');
 const dashboardRoutes = require('./routes/dashboard');
 const exportRoutes = require('./routes/export');
+const notificationsRoutes = require('./routes/notifications');
+const ticketsRoutes = require('./routes/tickets');
+const alertsRoutes = require('./routes/alerts');
 
 // App (mobile) route imports
 const appAuthRoutes = require('./routes/app/auth');
@@ -28,6 +31,8 @@ const appAnalyticsRoutes = require('./routes/app/analytics');
 const appReadingsRoutes = require('./routes/app/readings');
 const appSyncRoutes = require('./routes/app/sync');
 const appLicensesRoutes = require('./routes/app/licenses');
+const appNotificationsRoutes = require('./routes/app/notifications');
+const appTicketsRoutes = require('./routes/app/tickets');
 
 const app = express();
 
@@ -109,6 +114,9 @@ app.use('/api/admin/devices', devicesRoutes);
 app.use('/api/admin/licenses', licensesRoutes);
 app.use('/api/admin/dashboard', dashboardRoutes);
 app.use('/api/admin/export', exportRoutes);
+app.use('/api/admin/notifications', notificationsRoutes);
+app.use('/api/admin/tickets', ticketsRoutes);
+app.use('/api/admin/alerts', alertsRoutes);
 
 // Mobile app routes
 app.use('/api/app/auth', appAuthRoutes);
@@ -128,6 +136,8 @@ app.use('/api/app/reports', appReportsRoutes);
 app.use('/api/app/ecg-beats', ingestLimiter, appEcgBeatsRoutes);
 app.use('/api/app/sync', ingestLimiter, appSyncRoutes);
 app.use('/api/app/licenses', appLicensesRoutes);
+app.use('/api/app/notifications', appNotificationsRoutes);
+app.use('/api/app/tickets', appTicketsRoutes);
 
 app.get("/", (req, res) => {
   res.send("Backend running 🚀");
