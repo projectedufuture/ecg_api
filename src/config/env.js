@@ -31,21 +31,12 @@ module.exports = {
     origin: buildOriginList(),
   },
   email: {
+    // Brevo v3 API key (starts "xkeysib-"), used by utils/emailService over
+    // HTTPS. This is NOT the SMTP key ("xsmtpsib-") — the HTTP API rejects that.
     apiKey: process.env.BREVO_API_KEY || '',
     senderName: process.env.BREVO_SENDER_NAME || 'ECG Admin Panel',
     senderEmail: process.env.BREVO_SENDER_EMAIL || '',
     frontendUrl: process.env.FRONTEND_URL || 'https://admin-ecg.netlify.app',
-  },
-  // Brevo SMTP relay (used by utils/emailService instead of the REST API).
-  // The password is the Brevo SMTP key (starts "xsmtpsib-"); we reuse
-  // BREVO_API_KEY since that variable already holds it. SMTP_USER must be the
-  // SMTP *login* shown on Brevo's "SMTP & API" page (often an
-  // <id>@smtp-brevo.com address, or your account email).
-  smtp: {
-    host: process.env.SMTP_HOST || 'smtp-relay.brevo.com',
-    port: parseInt(process.env.SMTP_PORT, 10) || 587,
-    user: process.env.SMTP_USER || process.env.BREVO_SMTP_LOGIN || process.env.BREVO_SENDER_EMAIL || '',
-    pass: process.env.SMTP_PASS || process.env.BREVO_API_KEY || '',
   },
   reports: {
     // A recording shorter than this generates no reports. Short recordings

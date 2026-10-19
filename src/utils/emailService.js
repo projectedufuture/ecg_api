@@ -1,35 +1,30 @@
-const nodemailer = require('nodemailer');
 const config = require('../config/env');
 
-// ── Mail transport (Brevo SMTP relay) ───────────────────────────────────────
+// ── Mail transport (Brevo HTTP API) ──────────────────────────────────────────
 // All templates below build the same Brevo-style `payload`
-// ({ sender, to, subject, htmlContent }); `dispatch` translates that into a
-// nodemailer send over Brevo's SMTP relay. Using SMTP (not the REST API) lets
-// us authenticate with the SMTP key (xsmtpsib-…) the project already has.
-let _transporter = null;
-function getTransporter() {
-  if (!_transporter) {
-    _transporter = nodemailer.createTransport({
-      host: config.smtp.host,
-      port: config.smtp.port,
-      secure: config.smtp.port === 465, // 465 = implicit TLS; 587 = STARTTLS
-      auth: { user: config.smtp.user, pass: config.smtp.pass },
-    });
-  }
-  return _transporter;
-}
-
+// ({ sender, to, subject, htmlContent }); `dispatch` POSTs it to Brevo's
+// transactional-email REST API over HTTPS (port 443).
+//
+// We use the HTTP API rather than SMTP because hosting platforms (Render, and
+// many others) block outbound SMTP ports (25/465/587), which makes SMTP sends
+// time out in production. HTTPS is always open. This endpoint authenticates
+// with a Brevo *v3 API key* (starts "xkeysib-"), set as BREVO_API_KEY — note
+// that is a different key from the SMTP key ("xsmtpsib-").
 async function dispatch(payload) {
-  const to = (payload.to || [])
-    .map((r) => (r.name ? `"${r.name}" <${r.email}>` : r.email))
-    .join(', ');
-
-  await getTransporter().sendMail({
-    from: { name: payload.sender.name, address: payload.sender.email },
-    to,
-    subject: payload.subject,
-    html: payload.htmlContent,
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'api-key': config.email.apiKey,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(payload),
   });
+
+  if (!response.ok) {
+    const errBody = await response.text();
+    throw new Error(`Brevo API error ${response.status}: ${errBody}`);
+  }
 }
 
 // Shared light/white theme palette so all templates stay consistent.
