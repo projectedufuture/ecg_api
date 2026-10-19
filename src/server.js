@@ -19,6 +19,8 @@ const exportRoutes = require('./routes/export');
 const notificationsRoutes = require('./routes/notifications');
 const ticketsRoutes = require('./routes/tickets');
 const alertsRoutes = require('./routes/alerts');
+const summarySchedulesRoutes = require('./routes/summarySchedules');
+const { startScheduler } = require('./services/summaryScheduler');
 
 // App (mobile) route imports
 const appAuthRoutes = require('./routes/app/auth');
@@ -117,6 +119,7 @@ app.use('/api/admin/export', exportRoutes);
 app.use('/api/admin/notifications', notificationsRoutes);
 app.use('/api/admin/tickets', ticketsRoutes);
 app.use('/api/admin/alerts', alertsRoutes);
+app.use('/api/admin/summary-schedules', summarySchedulesRoutes);
 
 // Mobile app routes
 app.use('/api/app/auth', appAuthRoutes);
@@ -156,6 +159,9 @@ app.use((err, req, res, next) => {
 // Start server
 const start = async () => {
   await connectDB();
+  // Start the in-process summary-email scheduler (ticks every minute, sends
+  // due digests). Safe to run once DB is connected.
+  startScheduler();
   app.listen(config.server.port, () => {
     console.log(`Server running on port ${config.server.port} in ${config.server.nodeEnv} mode`);
   });

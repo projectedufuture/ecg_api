@@ -1,4 +1,36 @@
+const nodemailer = require('nodemailer');
 const config = require('../config/env');
+
+// ── Mail transport (Brevo SMTP relay) ───────────────────────────────────────
+// All templates below build the same Brevo-style `payload`
+// ({ sender, to, subject, htmlContent }); `dispatch` translates that into a
+// nodemailer send over Brevo's SMTP relay. Using SMTP (not the REST API) lets
+// us authenticate with the SMTP key (xsmtpsib-…) the project already has.
+let _transporter = null;
+function getTransporter() {
+  if (!_transporter) {
+    _transporter = nodemailer.createTransport({
+      host: config.smtp.host,
+      port: config.smtp.port,
+      secure: config.smtp.port === 465, // 465 = implicit TLS; 587 = STARTTLS
+      auth: { user: config.smtp.user, pass: config.smtp.pass },
+    });
+  }
+  return _transporter;
+}
+
+async function dispatch(payload) {
+  const to = (payload.to || [])
+    .map((r) => (r.name ? `"${r.name}" <${r.email}>` : r.email))
+    .join(', ');
+
+  await getTransporter().sendMail({
+    from: { name: payload.sender.name, address: payload.sender.email },
+    to,
+    subject: payload.subject,
+    html: payload.htmlContent,
+  });
+}
 
 // Shared light/white theme palette so all templates stay consistent.
 const T = {
@@ -107,20 +139,7 @@ async function sendPasswordResetEmail({ toEmail, toName, resetUrl }) {
     `.trim(),
   };
 
-  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
-    method: 'POST',
-    headers: {
-      'accept': 'application/json',
-      'api-key': config.email.apiKey,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    const errBody = await response.text();
-    throw new Error(`Brevo API error ${response.status}: ${errBody}`);
-  }
+  await dispatch(payload);
 }
 
 async function sendAppPasswordResetEmail({ toEmail, toName, resetUrl }) {
@@ -171,20 +190,7 @@ async function sendAppPasswordResetEmail({ toEmail, toName, resetUrl }) {
 </html>`.trim(),
   };
 
-  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
-    method: 'POST',
-    headers: {
-      'accept': 'application/json',
-      'api-key': config.email.apiKey,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    const errBody = await response.text();
-    throw new Error(`Brevo API error ${response.status}: ${errBody}`);
-  }
+  await dispatch(payload);
 }
 
 async function sendUserOnboardingEmail({ toEmail, toName, password, deviceId, licenseKey, loginUrl }) {
@@ -246,20 +252,7 @@ async function sendUserOnboardingEmail({ toEmail, toName, password, deviceId, li
 </html>`.trim(),
   };
 
-  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
-    method: 'POST',
-    headers: {
-      'accept': 'application/json',
-      'api-key': config.email.apiKey,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    const errBody = await response.text();
-    throw new Error(`Brevo API error ${response.status}: ${errBody}`);
-  }
+  await dispatch(payload);
 }
 
 async function sendDeviceAssignmentEmail({ toEmail, toName, deviceId, licenseKey }) {
@@ -304,20 +297,149 @@ async function sendDeviceAssignmentEmail({ toEmail, toName, deviceId, licenseKey
 </html>`.trim(),
   };
 
-  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
-    method: 'POST',
-    headers: {
-      'accept': 'application/json',
-      'api-key': config.email.apiKey,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
+  await dispatch(payload);
+}
 
-  if (!response.ok) {
-    const errBody = await response.text();
-    throw new Error(`Brevo API error ${response.status}: ${errBody}`);
+// Format an ISO timestamp for display inside a given IANA timezone.
+function fmtInTz(iso, timezone) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: timezone || 'UTC',
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    }).format(d);
+  } catch {
+    return d.toISOString();
   }
+}
+
+function fmtDuration(min) {
+  const m = Math.max(0, Math.round(Number(min) || 0));
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  const r = m % 60;
+  return r ? `${h}h ${r}m` : `${h}h`;
+}
+
+/**
+ * Scheduled session-activity summary.
+ * `digest` is the object produced by utils/summaryDigest.buildSummaryDigest.
+ */
+async function sendSummaryEmail({ toEmail, periodLabel, rangeLabel, timezone, digest, scopeLabel }) {
+  const stat = (label, value) => `
+    <td align="center" style="padding:12px 8px;">
+      <div style="color:${T.heading};font-size:24px;font-weight:700;line-height:1;">${value}</div>
+      <div style="color:${T.muted};font-size:12px;margin-top:4px;">${label}</div>
+    </td>`;
+
+  const sessionRows = digest.sessions.length
+    ? digest.sessions
+        .map(
+          (s) => `
+      <tr>
+        <td style="padding:8px 10px;border-bottom:1px solid ${T.innerBorder};color:${T.strong};font-size:13px;">${s.userName || '—'}</td>
+        <td style="padding:8px 10px;border-bottom:1px solid ${T.innerBorder};color:${T.body};font-size:13px;">${fmtInTz(s.startTime, timezone)}</td>
+        <td style="padding:8px 10px;border-bottom:1px solid ${T.innerBorder};color:${T.body};font-size:13px;text-transform:capitalize;">${s.activityType}</td>
+        <td style="padding:8px 10px;border-bottom:1px solid ${T.innerBorder};color:${T.strong};font-size:13px;text-align:right;">${fmtDuration(s.durationMin)}</td>
+      </tr>`
+        )
+        .join('')
+    : `<tr><td colspan="4" style="padding:16px 10px;color:${T.muted};font-size:13px;text-align:center;">No sessions were recorded in this period.</td></tr>`;
+
+  const loginRows = digest.logins.length
+    ? digest.logins
+        .slice(0, 50)
+        .map(
+          (u) => `
+      <tr>
+        <td style="padding:8px 10px;border-bottom:1px solid ${T.innerBorder};color:${T.strong};font-size:13px;">${u.name || '—'}</td>
+        <td style="padding:8px 10px;border-bottom:1px solid ${T.innerBorder};color:${T.body};font-size:13px;">${u.email || '—'}</td>
+        <td style="padding:8px 10px;border-bottom:1px solid ${T.innerBorder};color:${T.body};font-size:13px;text-align:right;">${fmtInTz(u.lastActive, timezone)}</td>
+      </tr>`
+        )
+        .join('')
+    : `<tr><td colspan="3" style="padding:16px 10px;color:${T.muted};font-size:13px;text-align:center;">No user activity in this period.</td></tr>`;
+
+  const payload = {
+    sender: { name: config.email.senderName, email: config.email.senderEmail },
+    to: [{ email: toEmail }],
+    subject: `${periodLabel} Activity Summary – Biotex`,
+    htmlContent: `
+<!DOCTYPE html>
+<html lang="en">
+<body style="margin:0;padding:0;background:${T.pageBg};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 16px;background:${T.pageBg};">
+    <tr><td align="center">
+      <table width="620" cellpadding="0" cellspacing="0" style="max-width:620px;width:100%;background:${T.cardBg};border-radius:20px;border:1px solid ${T.cardBorder};overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+        <tr><td align="center" style="padding:32px 40px 20px;">
+          <div style="width:52px;height:52px;border-radius:14px;background:${T.accentGradient};display:inline-flex;align-items:center;justify-content:center;margin-bottom:16px;">
+            <span style="font-size:24px;">📊</span>
+          </div>
+          <h1 style="color:${T.heading};font-size:22px;font-weight:700;margin:0 0 6px;">${periodLabel} Activity Summary</h1>
+          <p style="color:${T.subheading};font-size:14px;margin:0;">${rangeLabel}</p>
+          ${scopeLabel ? `<p style="color:${T.muted};font-size:12px;margin:6px 0 0;">${scopeLabel}</p>` : ''}
+        </td></tr>
+        <tr><td style="height:1px;background:${T.divider};"></td></tr>
+
+        <!-- Stat row -->
+        <tr><td style="padding:12px 24px;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:${T.innerBg};border:1px solid ${T.innerBorder};border-radius:12px;">
+            <tr>
+              ${stat('Sessions', digest.sessionCount)}
+              ${stat('Total Time', fmtDuration(digest.totalDurationMin))}
+              ${stat('Session Users', digest.uniqueSessionUsers)}
+              ${stat('Active Users', digest.activeUserCount)}
+            </tr>
+          </table>
+        </td></tr>
+
+        <!-- Sessions table -->
+        <tr><td style="padding:12px 24px 4px;">
+          <p style="color:${T.heading};font-size:15px;font-weight:600;margin:0 0 10px;">Sessions Recorded</p>
+          <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${T.innerBorder};border-radius:10px;overflow:hidden;">
+            <tr style="background:${T.innerBg};">
+              <th align="left" style="padding:8px 10px;color:${T.muted};font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">User</th>
+              <th align="left" style="padding:8px 10px;color:${T.muted};font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Started</th>
+              <th align="left" style="padding:8px 10px;color:${T.muted};font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Type</th>
+              <th align="right" style="padding:8px 10px;color:${T.muted};font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Duration</th>
+            </tr>
+            ${sessionRows}
+          </table>
+        </td></tr>
+
+        <!-- Logins table -->
+        <tr><td style="padding:16px 24px 8px;">
+          <p style="color:${T.heading};font-size:15px;font-weight:600;margin:0 0 10px;">User Activity / Logins</p>
+          <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${T.innerBorder};border-radius:10px;overflow:hidden;">
+            <tr style="background:${T.innerBg};">
+              <th align="left" style="padding:8px 10px;color:${T.muted};font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">User</th>
+              <th align="left" style="padding:8px 10px;color:${T.muted};font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Email</th>
+              <th align="right" style="padding:8px 10px;color:${T.muted};font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Last Active</th>
+            </tr>
+            ${loginRows}
+          </table>
+        </td></tr>
+
+        <tr><td style="height:1px;background:${T.divider};margin-top:8px;"></td></tr>
+        <tr><td style="padding:20px 40px;text-align:center;">
+          <p style="color:${T.footer};font-size:12px;margin:0;">
+            © ${new Date().getFullYear()} Biotex Admin Panel · Automated summary — times shown in ${timezone || 'UTC'}
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim(),
+  };
+
+  await dispatch(payload);
 }
 
 module.exports = {
@@ -325,4 +447,5 @@ module.exports = {
   sendAppPasswordResetEmail,
   sendUserOnboardingEmail,
   sendDeviceAssignmentEmail,
+  sendSummaryEmail,
 };
