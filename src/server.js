@@ -19,7 +19,6 @@ const dashboardRoutes = require('./routes/dashboard');
 const exportRoutes = require('./routes/export');
 const notificationsRoutes = require('./routes/notifications');
 const ticketsRoutes = require('./routes/tickets');
-const alertsRoutes = require('./routes/alerts');
 const summarySchedulesRoutes = require('./routes/summarySchedules');
 const { startScheduler } = require('./services/summaryScheduler');
 const { initRealtime } = require('./realtime/socket');
@@ -120,7 +119,6 @@ app.use('/api/admin/dashboard', dashboardRoutes);
 app.use('/api/admin/export', exportRoutes);
 app.use('/api/admin/notifications', notificationsRoutes);
 app.use('/api/admin/tickets', ticketsRoutes);
-app.use('/api/admin/alerts', alertsRoutes);
 app.use('/api/admin/summary-schedules', summarySchedulesRoutes);
 
 // Mobile app routes

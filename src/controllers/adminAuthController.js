@@ -22,19 +22,11 @@ async function login(req, res) {
   }
 
   const { email, password } = req.body;
-  console.log("RAW EMAIL:", JSON.stringify(email));
-  console.log("EMAIL LENGTH:", email?.length);
 
   try {
     const normalizedEmail = String(email || '').trim().toLowerCase();
 
-    console.log('[admin login] database:', Admin.db.name);
-    console.log('[admin login] collection:', Admin.collection.name);
-    console.log('[admin login] email:', normalizedEmail);
-
     const admin = await Admin.findOne({ email: normalizedEmail });
-
-    console.log('[admin login] admin found:', !!admin);
 
     if (!admin) {
       return res.status(401).json({
@@ -45,8 +37,6 @@ async function login(req, res) {
     }
 
     const isMatch = await admin.comparePassword(password);
-
-    console.log('[admin login] password matches:', isMatch);
 
     if (!isMatch) {
       return res.status(401).json({
