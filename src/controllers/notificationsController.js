@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 const Admin = require('../models/Admin');
+const realtime = require('../realtime/events');
 
 const genId = () => `ntf_${crypto.randomBytes(8).toString('hex')}`;
 const genBatch = () => `bat_${crypto.randomBytes(8).toString('hex')}`;
@@ -122,6 +123,10 @@ async function sendNotification(req, res) {
 
     await Notification.insertMany(docs, { ordered: false });
 
+    // Saved → push to each recipient's own room (connected devices only;
+    // offline users get it from GET /api/app/notifications on reconnect).
+    realtime.notificationsCreated(docs);
+
     return res.status(201).json({
       success: true,
       data: { batchId, recipientCount: docs.length, audience: broadcast ? 'all' : 'selected' },
@@ -141,10 +146,12 @@ async function deleteNotification(req, res) {
   try {
     const filter = { batchId: req.params.batchId };
     if (req.clientScope) filter.clientId = req.clientScope;
+    const affected = await Notification.find(filter).select('id userId').lean();
     const result = await Notification.deleteMany(filter);
     if (result.deletedCount === 0) {
       return res.status(404).json({ success: false, data: null, error: 'Notification not found.' });
     }
+    realtime.notificationsDeleted(affected);
     return res.json({ success: true, data: { deletedCount: result.deletedCount }, error: null });
   } catch (error) {
     console.error('Delete notification error:', error);

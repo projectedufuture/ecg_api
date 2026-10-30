@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const Ticket = require('../../models/Ticket');
 const TicketMessage = require('../../models/TicketMessage');
 const User = require('../../models/User');
+const realtime = require('../../realtime/events');
 
 const genTicketId = () => `tkt_${crypto.randomBytes(8).toString('hex')}`;
 const genMsgId = () => `tmsg_${crypto.randomBytes(8).toString('hex')}`;
@@ -24,6 +25,16 @@ async function createTicket(req, res) {
     const { subject, message } = req.body;
     const category = CATEGORIES.includes(req.body.category) ? req.body.category : 'general';
     const priority = PRIORITIES.includes(req.body.priority) ? req.body.priority : 'medium';
+    const clientMsgId = req.body.clientMsgId || undefined;
+
+    // Idempotent retry: the same request already created a ticket.
+    if (clientMsgId) {
+      const prior = await TicketMessage.findOne({ senderId: userId, clientMsgId }).lean();
+      if (prior) {
+        const existing = await Ticket.findOne({ id: prior.ticketId, userId });
+        if (existing) return res.status(200).json({ success: true, data: existing.toShape(), error: null });
+      }
+    }
 
     const ticketNumber = await nextTicketNumber();
     const now = new Date();
@@ -32,10 +43,13 @@ async function createTicket(req, res) {
       subject, category, priority, status: 'open', lastMessage: message, lastSender: 'user',
       lastActivityAt: now, messageCount: 1, clientId: user.clientId || 'CLIENT-001',
     });
-    await TicketMessage.create({
+    const first = await TicketMessage.create({
       id: genMsgId(), ticketId: ticket.id, userId, sender: 'user', senderId: userId,
-      senderName: user.name, body: message, read: false, clientId: ticket.clientId,
+      senderName: user.name, body: message, read: false, clientId: ticket.clientId, clientMsgId,
     });
+
+    // Saved → tell the admin panel (and the user's other devices).
+    realtime.ticketCreated(ticket, first);
 
     return res.status(201).json({ success: true, data: ticket.toShape(), error: null });
   } catch (error) {
@@ -86,7 +100,9 @@ async function getMyTicket(req, res) {
   try {
     const ticket = await Ticket.findOne({ id: req.params.id, userId: req.user.userId }).lean();
     if (!ticket) return res.status(404).json({ success: false, data: null, error: 'Ticket not found.' });
-    await TicketMessage.updateMany({ ticketId: ticket.id, sender: 'admin', read: false }, { $set: { read: true, readAt: new Date() } });
+    const marked = await TicketMessage.updateMany({ ticketId: ticket.id, sender: 'admin', read: false }, { $set: { read: true, readAt: new Date() } });
+    // Replies just became read → keep the badge on the user's other devices in step.
+    if (marked.modifiedCount > 0) realtime.ticketReadByUser(req.user.userId);
     const messages = await TicketMessage.find({ ticketId: ticket.id }).sort({ createdAt: 1 }).lean();
     return res.json({
       success: true,
@@ -110,18 +126,45 @@ async function replyMyTicket(req, res) {
   try {
     const ticket = await Ticket.findOne({ id: req.params.id, userId: req.user.userId });
     if (!ticket) return res.status(404).json({ success: false, data: null, error: 'Ticket not found.' });
-    const user = await User.findOne({ id: req.user.userId }).select('name').lean();
-    const msg = await TicketMessage.create({
-      id: genMsgId(), ticketId: ticket.id, userId: ticket.userId, sender: 'user', senderId: ticket.userId,
-      senderName: user?.name || 'User', body: req.body.body, read: false, clientId: ticket.clientId,
+    const clientMsgId = req.body.clientMsgId || undefined;
+    const reply = (m, status) => ({
+      success: true,
+      data: { message: { id: m.id, sender: 'user', senderName: m.senderName, body: m.body, createdAt: m.createdAt }, status },
+      error: null,
     });
+
+    // Idempotent retry: this exact send was already saved — return it, don't re-insert or re-announce.
+    if (clientMsgId) {
+      const prior = await TicketMessage.findOne({ ticketId: ticket.id, clientMsgId }).lean();
+      if (prior) return res.status(200).json(reply(prior, ticket.status));
+    }
+
+    const user = await User.findOne({ id: req.user.userId }).select('name').lean();
+    let msg;
+    try {
+      msg = await TicketMessage.create({
+        id: genMsgId(), ticketId: ticket.id, userId: ticket.userId, sender: 'user', senderId: ticket.userId,
+        senderName: user?.name || 'User', body: req.body.body, read: false, clientId: ticket.clientId, clientMsgId,
+      });
+    } catch (e) {
+      // Two concurrent retries raced past the check above; the unique index kept one.
+      if (e && e.code === 11000 && clientMsgId) {
+        const prior = await TicketMessage.findOne({ ticketId: ticket.id, clientMsgId }).lean();
+        if (prior) return res.status(200).json(reply(prior, ticket.status));
+      }
+      throw e;
+    }
     ticket.lastMessage = req.body.body;
     ticket.lastSender = 'user';
     ticket.lastActivityAt = new Date();
     ticket.messageCount = (ticket.messageCount || 0) + 1;
     if (ticket.status === 'resolved' || ticket.status === 'closed' || ticket.status === 'pending') ticket.status = 'open';
     await ticket.save();
-    return res.status(201).json({ success: true, data: { message: { id: msg.id, sender: 'user', senderName: msg.senderName, body: msg.body, createdAt: msg.createdAt }, status: ticket.status }, error: null });
+
+    // Saved → deliver to the admin panel (and the user's other devices).
+    realtime.ticketMessage(ticket, msg);
+
+    return res.status(201).json(reply(msg, ticket.status));
   } catch (error) {
     console.error('App replyMyTicket error:', error);
     return res.status(500).json({ success: false, data: null, error: 'Internal server error.' });
@@ -133,6 +176,7 @@ async function closeMyTicket(req, res) {
   try {
     const ticket = await Ticket.findOneAndUpdate({ id: req.params.id, userId: req.user.userId }, { $set: { status: 'closed', lastActivityAt: new Date() } }, { new: true }).lean();
     if (!ticket) return res.status(404).json({ success: false, data: null, error: 'Ticket not found.' });
+    realtime.ticketUpdated(ticket);
     return res.json({ success: true, data: { id: ticket.id, status: ticket.status }, error: null });
   } catch (error) {
     console.error('App closeMyTicket error:', error);

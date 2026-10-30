@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const Ticket = require('../models/Ticket');
 const TicketMessage = require('../models/TicketMessage');
 const Admin = require('../models/Admin');
+const realtime = require('../realtime/events');
 
 const genMsgId = () => `tmsg_${crypto.randomBytes(8).toString('hex')}`;
 
@@ -71,7 +72,9 @@ async function getTicket(req, res) {
     const ticket = await Ticket.findOne(filter).lean();
     if (!ticket) return res.status(404).json({ success: false, data: null, error: 'Ticket not found.' });
 
-    await TicketMessage.updateMany({ ticketId: ticket.id, sender: 'user', read: false }, { $set: { read: true, readAt: new Date() } });
+    const marked = await TicketMessage.updateMany({ ticketId: ticket.id, sender: 'user', read: false }, { $set: { read: true, readAt: new Date() } });
+    // Other admin tabs/devices update their unread badge.
+    if (marked.modifiedCount > 0) realtime.ticketReadByAdmin(ticket);
     const messages = await TicketMessage.find({ ticketId: ticket.id }).sort({ createdAt: 1 }).lean();
 
     return res.json({
@@ -100,13 +103,35 @@ async function replyTicket(req, res) {
     const ticket = await Ticket.findOne(filter);
     if (!ticket) return res.status(404).json({ success: false, data: null, error: 'Ticket not found.' });
 
+    const clientMsgId = req.body.clientMsgId || undefined;
+    const reply = (m, status) => ({
+      success: true,
+      data: { message: { id: m.id, sender: 'admin', senderName: m.senderName, body: m.body, read: !!m.read, createdAt: m.createdAt }, status },
+      error: null,
+    });
+
+    // Idempotent retry of the same send → return the saved message.
+    if (clientMsgId) {
+      const prior = await TicketMessage.findOne({ ticketId: ticket.id, clientMsgId }).lean();
+      if (prior) return res.status(200).json(reply(prior, ticket.status));
+    }
+
     const adminDoc = await Admin.findOne({ id: req.admin.id }).select('name').lean();
     const senderName = adminDoc?.name || 'Support';
 
-    const msg = await TicketMessage.create({
-      id: genMsgId(), ticketId: ticket.id, userId: ticket.userId, sender: 'admin',
-      senderId: req.admin.id, senderName, body: req.body.body, read: false, clientId: ticket.clientId,
-    });
+    let msg;
+    try {
+      msg = await TicketMessage.create({
+        id: genMsgId(), ticketId: ticket.id, userId: ticket.userId, sender: 'admin',
+        senderId: req.admin.id, senderName, body: req.body.body, read: false, clientId: ticket.clientId, clientMsgId,
+      });
+    } catch (e) {
+      if (e && e.code === 11000 && clientMsgId) {
+        const prior = await TicketMessage.findOne({ ticketId: ticket.id, clientMsgId }).lean();
+        if (prior) return res.status(200).json(reply(prior, ticket.status));
+      }
+      throw e;
+    }
 
     ticket.lastMessage = req.body.body;
     ticket.lastSender = 'admin';
@@ -116,11 +141,10 @@ async function replyTicket(req, res) {
     ticket.assignedAdminId = ticket.assignedAdminId || req.admin.id;
     await ticket.save();
 
-    return res.status(201).json({
-      success: true,
-      data: { message: { id: msg.id, sender: 'admin', senderName, body: msg.body, read: false, createdAt: msg.createdAt }, status: ticket.status },
-      error: null,
-    });
+    // Saved → deliver to the user's app immediately (and to other admins).
+    realtime.ticketMessage(ticket, msg);
+
+    return res.status(201).json(reply(msg, ticket.status));
   } catch (error) {
     console.error('Reply ticket error:', error);
     return res.status(500).json({ success: false, data: null, error: 'Internal server error.' });
@@ -139,6 +163,7 @@ async function updateTicket(req, res) {
 
     const ticket = await Ticket.findOneAndUpdate(filter, { $set: update }, { new: true }).lean();
     if (!ticket) return res.status(404).json({ success: false, data: null, error: 'Ticket not found.' });
+    realtime.ticketUpdated(ticket);
     return res.json({ success: true, data: { id: ticket.id, status: ticket.status, priority: ticket.priority }, error: null });
   } catch (error) {
     console.error('Update ticket error:', error);
@@ -146,4 +171,20 @@ async function updateTicket(req, res) {
   }
 }
 
-module.exports = { listTickets, getTicket, replyTicket, updateTicket };
+/** GET /admin/tickets/unread-count — unread user messages in the admin's scope (top-bar bell). */
+async function getUnreadCount(req, res) {
+  try {
+    const filter = { sender: 'user', read: false };
+    if (req.clientScope) filter.clientId = req.clientScope;
+    const [unreadCount, ticketsWithUnread] = await Promise.all([
+      TicketMessage.countDocuments(filter),
+      TicketMessage.distinct('ticketId', filter).then((ids) => ids.length),
+    ]);
+    return res.json({ success: true, data: { unreadCount, ticketsWithUnread }, error: null });
+  } catch (error) {
+    console.error('Admin ticket unread error:', error);
+    return res.status(500).json({ success: false, data: null, error: 'Internal server error.' });
+  }
+}
+
+module.exports = { listTickets, getTicket, replyTicket, updateTicket, getUnreadCount };

@@ -70,4 +70,27 @@ const forgotPasswordLimiter = rateLimit({
   },
 });
 
-module.exports = { generalLimiter, ingestLimiter, loginLimiter, forgotPasswordLimiter };
+/**
+ * Support-chat message sending (create ticket / reply), per authenticated
+ * SENDER rather than per IP: a user can't flood a thread from several
+ * networks, and users behind one shared IP don't throttle each other.
+ * Mount AFTER the auth middleware so req.user / req.admin is set.
+ */
+const messageLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    if (req.user && req.user.userId) return `u:${req.user.userId}`;
+    if (req.admin && req.admin.id) return `a:${req.admin.id}`;
+    return `ip:${req.ip}`;
+  },
+  message: {
+    success: false,
+    data: null,
+    error: 'You are sending messages too quickly. Please wait a moment.',
+  },
+});
+
+module.exports = { generalLimiter, ingestLimiter, loginLimiter, forgotPasswordLimiter, messageLimiter };

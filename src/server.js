@@ -1,3 +1,4 @@
+const http = require('http');
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
@@ -21,6 +22,7 @@ const ticketsRoutes = require('./routes/tickets');
 const alertsRoutes = require('./routes/alerts');
 const summarySchedulesRoutes = require('./routes/summarySchedules');
 const { startScheduler } = require('./services/summaryScheduler');
+const { initRealtime } = require('./realtime/socket');
 
 // App (mobile) route imports
 const appAuthRoutes = require('./routes/app/auth');
@@ -162,8 +164,12 @@ const start = async () => {
   // Start the in-process summary-email scheduler (ticks every minute, sends
   // due digests). Safe to run once DB is connected.
   startScheduler();
-  app.listen(config.server.port, () => {
-    console.log(`Server running on port ${config.server.port} in ${config.server.nodeEnv} mode`);
+  // One HTTP server for both REST and the real-time Socket.IO channel
+  // (support chat + notifications), so they share the port, TLS and proxy.
+  const server = http.createServer(app);
+  initRealtime(server);
+  server.listen(config.server.port, () => {
+    console.log(`Server running on port ${config.server.port} in ${config.server.nodeEnv} mode (REST + realtime)`);
   });
 };
 

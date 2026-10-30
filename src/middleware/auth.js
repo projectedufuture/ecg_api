@@ -15,6 +15,17 @@ function auth(req, res, next) {
 
   try {
     const decoded = verifyAccessToken(token);
+    // Mobile-app tokens are signed with the SAME secret, so the signature
+    // alone does not prove this is an admin. An app token has no admin role;
+    // without this check it reached applyClientScope with clientScope
+    // `undefined`, which every controller treats as "unscoped super admin".
+    if (decoded.type === 'app' || !['super_admin', 'client_admin'].includes(decoded.role) || !decoded.id) {
+      return res.status(401).json({
+        success: false,
+        data: null,
+        error: 'Invalid token.',
+      });
+    }
     req.admin = decoded;
     next();
   } catch (error) {

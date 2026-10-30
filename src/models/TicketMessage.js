@@ -13,10 +13,26 @@ const ticketMessageSchema = new mongoose.Schema(
     read: { type: Boolean, default: false },
     readAt: { type: Date, default: null },
     clientId: { type: String, default: 'CLIENT-001', index: true },
+    // Optional sender-generated id for idempotent sends: a retry after a lost
+    // response (timeout, reconnect) carries the same value and returns the
+    // already-saved message instead of inserting a duplicate. NOT the tenant
+    // `clientId` above.
+    clientMsgId: { type: String, default: undefined },
   },
   { timestamps: true }
 );
 
+// Unique per ticket, only for messages that carry a clientMsgId (old rows and
+// clients that don't send one are unaffected).
+ticketMessageSchema.index(
+  { ticketId: 1, clientMsgId: 1 },
+  { unique: true, partialFilterExpression: { clientMsgId: { $type: 'string' } } }
+);
+// Lookup for an idempotent "create ticket" retry (the first message).
+ticketMessageSchema.index(
+  { senderId: 1, clientMsgId: 1 },
+  { partialFilterExpression: { clientMsgId: { $type: 'string' } } }
+);
 ticketMessageSchema.index({ ticketId: 1, createdAt: 1 });
 ticketMessageSchema.index({ ticketId: 1, sender: 1, read: 1 });
 

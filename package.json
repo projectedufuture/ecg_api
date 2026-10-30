@@ -6,8 +6,6 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "seed": "node seed.js",
-    "seed:admin": "node scripts/seed-admin.js",
     "test": "node --test --test-force-exit tests/*.test.js"
   },
   "dependencies": {
@@ -24,10 +22,13 @@
     "json2csv": "^6.0.0-alpha.2",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.6.0",
-    "nodemailer": "^8.0.5"
+    "nodemailer": "^8.0.5",
+    "socket.io": "^4.8.4"
   },
   "devDependencies": {
-    "nodemon": "^3.1.4"
+    "mongodb-memory-server": "^10.4.3",
+    "nodemon": "^3.1.4",
+    "socket.io-client": "^4.8.4"
   },
   "engines": {
     "node": ">=20.0.0"

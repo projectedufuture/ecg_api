@@ -1,4 +1,5 @@
 const Notification = require('../../models/Notification');
+const realtime = require('../../realtime/events');
 
 /** GET /api/app/notifications — the signed-in user's notifications, newest first. */
 async function getNotifications(req, res) {
@@ -51,6 +52,7 @@ async function markRead(req, res) {
       { new: true }
     ).lean();
     if (!n) return res.status(404).json({ success: false, data: null, error: 'Notification not found.' });
+    realtime.notificationsReadChanged(req.user.userId); // other devices' badges
     return res.json({ success: true, data: { id: n.id, read: true }, error: null });
   } catch (error) {
     console.error('App markRead error:', error);
@@ -65,6 +67,7 @@ async function markAllRead(req, res) {
       { userId: req.user.userId, read: false },
       { $set: { read: true, readAt: new Date() } }
     );
+    if (r.modifiedCount > 0) realtime.notificationsReadChanged(req.user.userId);
     return res.json({ success: true, data: { updated: r.modifiedCount || 0 }, error: null });
   } catch (error) {
     console.error('App markAllRead error:', error);
